@@ -12,7 +12,7 @@
 #define SUCCESS 1
 #define FAILURE 0
 
-/* Multiplication algorithm selection based on MpInt size */
+/* Multiplication algorithm selection based on mp_int size */
 #define NAIVE_THRESHOLD 16
 
 /* Multiple precision int representation */
@@ -20,20 +20,20 @@ typedef struct {
     int sign;
     unsigned int *digits;
     size_t length, capacity; /* number of limbs used (current, max) */
-} MpInt;
+} mp_int;
 
 /* Forward declarations (to avoid implicit-declaration warnings) */
-int parse_operand_to_mp(MpInt *dst, const char *s);
-int mp_from_str_bin(MpInt *x, const char *str);
-int mp_from_str_hex(MpInt *x, const char *str);
-int mp_print_dec(MpInt *x);
-int mp_print_bin(MpInt *x);
-int mp_print_hex(MpInt *x);
+int parse_operand_to_mp(mp_int *dst, const char *s);
+int mp_from_str_bin(mp_int *x, const char *str);
+int mp_from_str_hex(mp_int *x, const char *str);
+int mp_print_dec(mp_int *x);
+int mp_print_bin(mp_int *x);
+int mp_print_hex(mp_int *x);
 
 /* ---------------------------------- Memory management helpers -------------------------------------- */
 
-/* Initializes MpInt x to empty state */
-int mp_init(MpInt *x) {
+/* Initializes mp_int x to empty state */
+int mp_init(mp_int *x) {
     if (!x) return FAILURE;
     x->sign = 0;
     x->length = 0;
@@ -42,8 +42,8 @@ int mp_init(MpInt *x) {
     return SUCCESS;
 }
 
-/* Frees memory used by the digits and reinitializes the MpInt */
-int mp_free(MpInt *x) {
+/* Frees memory used by the digits and reinitializes the mp_int */
+int mp_free(mp_int *x) {
     if (!x) return SUCCESS;
     free(x->digits);
     /* reinitialize */
@@ -54,8 +54,8 @@ int mp_free(MpInt *x) {
     return SUCCESS;
 }
 
-/* Reallocates memory for the new desired size of a MpInt */
-int mp_reserve(MpInt *x, size_t capacity) {
+/* Reallocates memory for the new desired size of a mp_int */
+int mp_reserve(mp_int *x, size_t capacity) {
     unsigned int *new_digits;
     if (!x) return FAILURE;
     if (capacity <= x->capacity)
@@ -70,8 +70,8 @@ int mp_reserve(MpInt *x, size_t capacity) {
     return SUCCESS;
 }
 
-/* Copy MpInt src -> dst (dst must be initialized with mp_init) */
-int mp_copy(MpInt *dst, const MpInt *src) {
+/* Copy mp_int src -> dst (dst must be initialized with mp_init) */
+int mp_copy(mp_int *dst, const mp_int *src) {
     if (!dst || !src) return FAILURE;
     if (src->length == 0) {
         dst->length = 0;
@@ -87,9 +87,9 @@ int mp_copy(MpInt *dst, const MpInt *src) {
 
 /* ----------------------------------------- Arithmetic logic ------------------------------------------- */
 
-/* Compare absolute values of two MpInts */
+/* Compare absolute values of two mp_ints */
 /* Returns 1 if a is greater, -1 if b is greater, otherwise 0 */
-int mp_cmp_abs(const MpInt *a, const MpInt *b) {
+int mp_cmp_abs(const mp_int *a, const mp_int *b) {
     size_t i;
     if (!a || !b) return 0;
     if (a->length != b->length)
@@ -104,8 +104,8 @@ int mp_cmp_abs(const MpInt *a, const MpInt *b) {
     return 0;
 }
 
-/* Adds a MpInt and a regular unsigned int */
-int mp_add_small(MpInt *x, unsigned int a)
+/* Adds a mp_int and a regular unsigned int */
+int mp_add_small(mp_int *x, unsigned int a)
 {
     unsigned long carry;
     size_t i;
@@ -130,8 +130,8 @@ int mp_add_small(MpInt *x, unsigned int a)
     return SUCCESS;
 }
 
-/* Multiplies a MpInt by a regular unsigned int */
-int mp_mul_small(MpInt *x, unsigned int m)
+/* Multiplies a mp_int by a regular unsigned int */
+int mp_mul_small(mp_int *x, unsigned int m)
 {
     unsigned long carry;
     size_t i;
@@ -156,8 +156,8 @@ int mp_mul_small(MpInt *x, unsigned int m)
     return SUCCESS;
 }
 
-/* Divides a MpInt by a regular unsigned int */
-int mp_div_small(MpInt *result, const MpInt *a, unsigned int divisor, unsigned int *remainder) {
+/* Divides a mp_int by a regular unsigned int */
+int mp_div_small(mp_int *result, const mp_int *a, unsigned int divisor, unsigned int *remainder) {
     unsigned long r;
     size_t i, len;
     unsigned long cur;
@@ -189,8 +189,8 @@ int mp_div_small(MpInt *result, const MpInt *a, unsigned int divisor, unsigned i
     return SUCCESS;
 }
 
-/* Unsigned addition of MpInt (absolute) */
-int mp_add_abs(MpInt *result, const MpInt *a, const MpInt *b) {
+/* Unsigned addition of mp_int (absolute) */
+int mp_add_abs(mp_int *result, const mp_int *a, const mp_int *b) {
     unsigned long carry, av, bv, sum;
     size_t i, n;
 
@@ -216,7 +216,7 @@ int mp_add_abs(MpInt *result, const MpInt *a, const MpInt *b) {
 }
 
 /* Unsigned subtraction: result = |a| - |b|  (assumes |a| >= |b|) */
-int mp_sub_abs(MpInt *result, const MpInt *a, const MpInt *b) {
+int mp_sub_abs(mp_int *result, const mp_int *a, const mp_int *b) {
     size_t n;
     unsigned long av, bv, diff, borrow;
     size_t i;
@@ -246,7 +246,7 @@ int mp_sub_abs(MpInt *result, const MpInt *a, const MpInt *b) {
 }
 
 /* Copy-based mp_add (signed) */
-int mp_add(MpInt *result, const MpInt *a, const MpInt *b) {
+int mp_add(mp_int *result, const mp_int *a, const mp_int *b) {
     if (!result || !a || !b) return FAILURE;
     if (a->sign == 0) return mp_copy(result, b);
     if (b->sign == 0) return mp_copy(result, a);
@@ -271,9 +271,9 @@ int mp_add(MpInt *result, const MpInt *a, const MpInt *b) {
     return SUCCESS;
 }
 
-/* Subtracts MpInt b from MpInt a */
-int mp_sub(MpInt *result, const MpInt *a, const MpInt *b) {
-    MpInt tmp;
+/* Subtracts mp_int b from mp_int a */
+int mp_sub(mp_int *result, const mp_int *a, const mp_int *b) {
+    mp_int tmp;
 
     if (!result || !a || !b) return FAILURE;
     mp_init(&tmp);
@@ -284,8 +284,8 @@ int mp_sub(MpInt *result, const MpInt *a, const MpInt *b) {
     return SUCCESS;
 }
 
-/* Naively multiplies two MpInts, suitable for smaller numbers*/
-int mp_mul_naive(MpInt *result, const MpInt *a, const MpInt *b) {
+/* Naively multiplies two mp_ints, suitable for smaller numbers*/
+int mp_mul_naive(mp_int *result, const mp_int *a, const mp_int *b) {
     size_t n, m, i, j, len;
     unsigned long carry, av, idx;
 
@@ -323,7 +323,7 @@ int mp_mul_naive(MpInt *result, const MpInt *a, const MpInt *b) {
 }
 
 /* Logical left shift by k limbs (base 2^(32*k)) */
-int mp_shift_left_words(MpInt *x, size_t k) {
+int mp_shift_left_words(mp_int *x, size_t k) {
     if (!x) return FAILURE;
     if (x->sign == 0 || k == 0) return SUCCESS;
     if (mp_reserve(x, x->length + k) != SUCCESS)
@@ -334,7 +334,36 @@ int mp_shift_left_words(MpInt *x, size_t k) {
     return SUCCESS;
 }
 
-void mp_split(const MpInt *src, MpInt *low, MpInt *high, size_t m) {
+/* Helper: right-shift by k limbs (words). Destructive. */
+int mp_shift_right_words(mp_int *x, size_t k) {
+    size_t i;
+    if (!x) return FAILURE;
+    if (x->length == 0 || k == 0) return SUCCESS;
+    if (k >= x->length) {
+        /* becomes zero */
+        x->length = 0;
+        x->sign = 0;
+        return SUCCESS;
+    }
+    /* shift down */
+    for (i = 0; i + k < x->length; ++i) {
+        x->digits[i] = x->digits[i + k];
+    }
+    /* clear high limbs */
+    for (; i < x->length; ++i) x->digits[i] = 0;
+    x->length -= k;
+    /* trim leading zeros */
+    while (x->length > 0 && x->digits[x->length - 1] == 0) x->length--;
+    if (x->length == 0) x->sign = 0;
+    return SUCCESS;
+}
+
+static int mp_is_zero(const mp_int *x) {
+    if (!x) return 1;
+    return (x->length == 0 || x->sign == 0) ? 1 : 0;
+}
+
+void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m) {
     size_t i;
 
     if (!src || !low || !high) return;
@@ -359,10 +388,10 @@ void mp_split(const MpInt *src, MpInt *low, MpInt *high, size_t m) {
 }
 
 /* Karatsuba multiply (recursive) */
-int mp_karatsuba_mul(MpInt *result, const MpInt *a, const MpInt *b)
+int mp_karatsuba_mul(mp_int *result, const mp_int *a, const mp_int *b)
 {
     size_t n, m;
-    MpInt x0, x1, y0, y1, z0, z1, z2, tmp1, tmp2, res_tmp;
+    mp_int x0, x1, y0, y1, z0, z1, z2, tmp1, tmp2, res_tmp;
 
     if (!result || !a || !b) return FAILURE;
 
@@ -420,8 +449,8 @@ int mp_karatsuba_mul(MpInt *result, const MpInt *a, const MpInt *b)
     return SUCCESS;
 }
 
-/* Multiplies two MpInts (hybrid) */
-int mp_mul(MpInt *result, const MpInt *a, const MpInt *b) {
+/* Multiplies two mp_ints (hybrid) */
+int mp_mul(mp_int *result, const mp_int *a, const mp_int *b) {
     if (!result || !a || !b) return FAILURE;
     if (a->length < NAIVE_THRESHOLD || b->length < NAIVE_THRESHOLD)
         return mp_mul_naive(result, a, b);
@@ -429,9 +458,9 @@ int mp_mul(MpInt *result, const MpInt *a, const MpInt *b) {
         return mp_karatsuba_mul(result, a, b);
 }
 
-/* Divides MpInt b by MpInt a */
+/* Divides mp_int b by mp_int a */
 /* Note: full long division is not implemented; only small divisor supported via mp_div_small */
-int mp_div(MpInt *result, const MpInt *a, const MpInt *b) {
+int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
     if (!result || !a || !b) return FAILURE;
     /* If divisor is a single limb, use mp_div_small */
     if (b->length == 1) {
@@ -441,25 +470,531 @@ int mp_div(MpInt *result, const MpInt *a, const MpInt *b) {
     return FAILURE; /* not implemented */
 }
 
-int mp_pow(MpInt *r, const MpInt *a, const MpInt *b) {
-    /* TODO: implement exponentiation */
-    printf("[warning] exponentiation not yet implemented\n");
-    mp_copy(r, a);
+int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
+{
+    mp_int base, exp, res, tmp, tmpb, qq, q;
+    unsigned int is_exp_odd, rem;
+
+    if (!r || !a || !b) return FAILURE;
+
+    /* Negative exponent not supported */
+    if (b->sign < 0) {
+        fprintf(stderr, "error: negative exponent\n");
+        return FAILURE;
+    }
+
+    /* Handle 0^0 and 0^positive cases */
+    if (a->sign == 0) {
+        if (b->sign == 0) {
+            /* define 0^0 = 1 */
+            mp_free(r);
+            mp_init(r);
+            mp_reserve(r, 1);
+            r->digits[0] = 1;
+            r->length = 1;
+            r->sign = 1;
+            return SUCCESS;
+        } else {
+            /* 0^n = 0 */
+            mp_free(r);
+            mp_init(r);
+            r->sign = 0;
+            r->length = 0;
+            return SUCCESS;
+        }
+    }
+
+    /* Handle exponent == 0 => 1 */
+    if (b->sign == 0) {
+        mp_free(r);
+        mp_init(r);
+        mp_reserve(r, 1);
+        r->digits[0] = 1;
+        r->length = 1;
+        r->sign = 1;
+        return SUCCESS;
+    }
+
+    mp_init(&base);
+    mp_init(&exp);
+    mp_init(&res);
+    mp_init(&tmp);
+
+    mp_copy(&base, a);
+    mp_copy(&exp, b);
+
+    /* res = 1 */
+    mp_reserve(&res, 1);
+    res.digits[0] = 1;
+    res.length = 1;
+    res.sign = 1;
+
+    /* main loop: while exp > 0 */
+    while (exp.sign != 0) {
+        rem = 0;
+        mp_init(&q);
+
+        /* q = exp / 2, rem = exp % 2 */
+        if (mp_div_small(&q, &exp, 2U, &rem) != SUCCESS) {
+            mp_free(&q);
+            mp_free(&base); mp_free(&exp); mp_free(&res); mp_free(&tmp);
+            return FAILURE;
+        }
+
+        /* if exponent is odd, multiply result by base */
+        if (rem == 1U) {
+            mp_init(&tmp);
+            if (mp_mul(&tmp, &res, &base) != SUCCESS) {
+                mp_free(&tmp); mp_free(&q);
+                mp_free(&base); mp_free(&exp); mp_free(&res);
+                return FAILURE;
+            }
+            mp_free(&res);
+            mp_init(&res);
+            mp_copy(&res, &tmp);
+            mp_free(&tmp);
+        }
+
+        /* square base */
+        mp_init(&tmp);
+        if (mp_mul(&tmp, &base, &base) != SUCCESS) {
+            mp_free(&tmp); mp_free(&q);
+            mp_free(&base); mp_free(&exp); mp_free(&res);
+            return FAILURE;
+        }
+        mp_free(&base);
+        mp_init(&base);
+        mp_copy(&base, &tmp);
+        mp_free(&tmp);
+
+        /* move quotient back into exp */
+        mp_free(&exp);
+        mp_init(&exp);
+        mp_copy(&exp, &q);
+        mp_free(&q);
+    }
+
+    /* Final sign: only relevant if base was negative and exponent is odd */
+    is_exp_odd = 0;
+    {
+        mp_init(&tmpb);
+        mp_copy(&tmpb, b);
+        rem = 0;
+        mp_init(&qq);
+        mp_div_small(&qq, &tmpb, 2U, &rem);
+        if (rem == 1) is_exp_odd = 1;
+        mp_free(&qq);
+        mp_free(&tmpb);
+    }
+
+    if (a->sign < 0 && is_exp_odd)
+        res.sign = -1;
+
+    /* move res into r */
+    mp_free(r);
+    mp_init(r);
+    mp_copy(r, &res);
+
+    mp_free(&base);
+    mp_free(&exp);
+    mp_free(&res);
+    mp_free(&tmp);
     return SUCCESS;
 }
 
-int mp_fact(MpInt *r, const MpInt *a) {
-    /* TODO: implement factorial */
-    printf("[warning] factorial not yet implemented\n");
-    mp_copy(r, a);
+
+/* ----------------- Factorial using precomputed table + productRange ----------------- */
+
+/* Precomputed table of factorials (n -> n! as decimal string).
+   You can extend this table with more entries if desired. */
+typedef struct {
+    unsigned int n;
+    const char *fact_str;
+} FactEntry;
+
+static FactEntry fact_table[] = {
+    {0, "1"},
+    {1, "1"},
+    {2, "2"},
+    {5, "120"},
+    {10, "3628800"},
+    {50, "30414093201713378043612608166064768844377641568960512000000000000"},
+    {75, "24809140811395398091946477116594033660926243886570122837795894512655842677572867409443815424000000000000000000"},
+    {100, "93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000"},
+    {200, "788657867364790503552363213932185062295135977687173263294742533244359449963403342920304284011984623904177212138919638830257642790242637105061926624952829931113462857270763317237396988943922445621451664240254033291864131227428294853277524242407573903240321257405579568660226031904170324062351700858796178922222789623703897374720000000000000000000000000000000000000000000000000"},
+    {0, NULL} /* sentinel */
+};
+
+/* Helper: create mp_int representing small unsigned value */
+static int mp_set_uint(mp_int *dst, unsigned int v) {
+    if (!dst) return FAILURE;
+    mp_free(dst);
+    mp_init(dst);
+    if (v == 0) {
+        dst->sign = 0;
+        dst->length = 0;
+        return SUCCESS;
+    }
+    if (mp_reserve(dst, 1) != SUCCESS) return FAILURE;
+    dst->digits[0] = v;
+    dst->length = 1;
+    dst->sign = +1;
     return SUCCESS;
 }
 
-int mp_mod(MpInt *r, const MpInt *a, const MpInt *b) {
-    /* TODO: implement modulo */
-    printf("[warning] modulo not yet implemented\n");
-    mp_copy(r, a);
+/* productRange(low, high, out)
+   computes product of integers in [low..high] into out (mp_int).
+   returns SUCCESS/FAILURE. ANSI C90-compliant. */
+static int productRange(unsigned int low, unsigned int high, mp_int *out) {
+    unsigned int mid;
+    mp_int left, right, tmp;
+    int status;
+
+    if (!out) return FAILURE;
+
+    mp_init(&left); mp_init(&right); mp_init(&tmp);
+
+    if (low > high) {
+        /* empty product = 1 */
+        status = mp_set_uint(out, 1);
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return status;
+    }
+
+    if (low == high) {
+        status = mp_set_uint(out, low);
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return status;
+    }
+
+    if (high - low == 1) {
+        /* out = low * high */
+        if (mp_set_uint(&left, low) != SUCCESS) { mp_free(&left); mp_free(&right); mp_free(&tmp); return FAILURE; }
+        if (mp_set_uint(&right, high) != SUCCESS) { mp_free(&left); mp_free(&right); mp_free(&tmp); return FAILURE; }
+        if (mp_mul(out, &left, &right) != SUCCESS) { mp_free(&left); mp_free(&right); mp_free(&tmp); return FAILURE; }
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return SUCCESS;
+    }
+
+    /* small range: iterative multiply using mp_mul_small for speed */
+    if (high - low < 10) {
+        if (mp_set_uint(out, low) != SUCCESS) { mp_free(&left); mp_free(&right); mp_free(&tmp); return FAILURE; }
+        {
+            unsigned int i;
+            for (i = low + 1; i <= high; ++i) {
+                if (mp_mul_small(out, i) != SUCCESS) {
+                    mp_free(&left); mp_free(&right); mp_free(&tmp);
+                    return FAILURE;
+                }
+            }
+        }
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return SUCCESS;
+    }
+
+    /* divide and conquer */
+    mid = (low + high) / 2;
+
+    if (productRange(low, mid, &left) != SUCCESS) {
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return FAILURE;
+    }
+    if (productRange(mid + 1, high, &right) != SUCCESS) {
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return FAILURE;
+    }
+
+    status = mp_mul(&tmp, &left, &right);
+    if (status != SUCCESS) {
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return FAILURE;
+    }
+
+    /* move tmp to out */
+    mp_free(out);
+    mp_init(out);
+    if (mp_copy(out, &tmp) != SUCCESS) {
+        mp_free(&left); mp_free(&right); mp_free(&tmp);
+        return FAILURE;
+    }
+
+    mp_free(&left); mp_free(&right); mp_free(&tmp);
     return SUCCESS;
+}
+
+/* Convert mp_int (non-negative) to uint32_t if possible.
+   Returns SUCCESS and writes value into *out if convertible, otherwise FAILURE. */
+static int mp_to_uint32(const mp_int *x, unsigned int *out) {
+    if (!x || !out) return FAILURE;
+    if (x->sign < 0) return FAILURE;
+    if (x->length == 0) { *out = 0U; return SUCCESS; }
+    if (x->length > 1) {
+        /* if any higher limb non-zero -> overflow */
+        if (x->length >= 2) {
+            size_t i;
+            for (i = 1; i < x->length; ++i) {
+                if (x->digits[i] != 0U) return FAILURE;
+            }
+        }
+    }
+    /* now lower limb holds value (may be > UINT_MAX but fits in unsigned int on typical platforms) */
+    /* Be strict: if value > UINT32_MAX reject */
+    if (x->digits[0] > 0xFFFFFFFFU) return FAILURE; /* technically always false for 32-bit unsigned int limb */
+    *out = x->digits[0];
+    return SUCCESS;
+}
+
+
+int mp_from_str_dec(mp_int *x, const char *str);
+/* mp_fact: compute factorial of integer 'a' and store in r.
+   Expects 'a' to be non-negative and reasonably small (fits into uint32_t).
+   Uses precomputed factorials and productRange for remaining range.
+*/
+int mp_fact(mp_int *r, const mp_int *a) {
+    unsigned int n;
+    size_t best_idx;
+    int found;
+    mp_int prod;
+    mp_int pre;
+    mp_int tmp;
+
+    if (!r || !a) return FAILURE;
+
+    /* negative input -> error */
+    if (a->sign < 0) {
+        fprintf(stderr, "error: factorial of negative number\n");
+        return FAILURE;
+    }
+
+    /* convert to uint32 */
+    if (mp_to_uint32(a, &n) != SUCCESS) {
+        fprintf(stderr, "error: factorial argument too large or not integer\n");
+        return FAILURE;
+    }
+
+    /* trivial cases */
+    if (n < 2U) {
+        /* r = 1 */
+        mp_free(r);
+        mp_init(r);
+        if (mp_set_uint(r, 1U) != SUCCESS) return FAILURE;
+        return SUCCESS;
+    }
+
+    /* find largest precomputed <= n */
+    best_idx = 0;
+    found = 0;
+    {
+        size_t i;
+        for (i = 0; fact_table[i].fact_str != NULL; ++i) {
+            if (fact_table[i].n <= n) {
+                best_idx = i;
+                found = 1;
+            }
+        }
+    }
+
+    /* if found, set pre = precomputed[best_idx], else pre = 1 */
+    mp_init(&pre);
+    if (found) {
+        if (mp_from_str_dec(&pre, fact_table[best_idx].fact_str) != SUCCESS) {
+            mp_free(&pre);
+            return FAILURE;
+        }
+    } else {
+        if (mp_set_uint(&pre, 1U) != SUCCESS) { mp_free(&pre); return FAILURE; }
+        best_idx = 0;
+    }
+
+    /* If precomputed base < n, compute productRange(base+1, n) and multiply */
+    mp_init(&prod);
+    mp_init(&tmp);
+
+    if (fact_table[best_idx].n < n) {
+        unsigned int low = fact_table[best_idx].n + 1U;
+        unsigned int high = n;
+        if (productRange(low, high, &prod) != SUCCESS) {
+            mp_free(&pre); mp_free(&prod); mp_free(&tmp);
+            return FAILURE;
+        }
+        /* tmp = pre * prod */
+        if (mp_mul(&tmp, &pre, &prod) != SUCCESS) {
+            mp_free(&pre); mp_free(&prod); mp_free(&tmp);
+            return FAILURE;
+        }
+        /* move tmp to r */
+        mp_free(r);
+        mp_init(r);
+        if (mp_copy(r, &tmp) != SUCCESS) {
+            mp_free(&pre); mp_free(&prod); mp_free(&tmp);
+            return FAILURE;
+        }
+    } else {
+        /* pre already equals n! */
+        mp_free(r);
+        mp_init(r);
+        if (mp_copy(r, &pre) != SUCCESS) {
+            mp_free(&pre); mp_free(&prod); mp_free(&tmp);
+            return FAILURE;
+        }
+    }
+
+    /* cleanup */
+    mp_free(&pre);
+    mp_free(&prod);
+    mp_free(&tmp);
+    return SUCCESS;
+}
+
+
+/* mp_mod: r = a % b
+   Remainder has same sign as 'a' (like C's %). Uses only ANSI C90 features. */
+int mp_mod(mp_int *r, const mp_int *a, const mp_int *b)
+{
+    /* variables declared at top per C90 */
+    size_t shift_words;
+    int cmp;
+    int status = FAILURE;
+
+    mp_int rem;
+    mp_int tmp;
+    mp_int candidate;
+    mp_int doubled;
+    mp_int newrem;
+    unsigned int rem_small;
+
+    if (!r || !a || !b) return FAILURE;
+    /* divisor zero */
+    if (b->length == 0 || b->sign == 0) return FAILURE;
+
+    /* dividend zero => remainder 0 */
+    if (a->length == 0 || a->sign == 0) {
+        mp_free(r);
+        mp_init(r);
+        r->sign = 0;
+        r->length = 0;
+        return SUCCESS;
+    }
+
+    /* fast path: single-limb divisor */
+    if (b->length == 1) {
+        mp_int q;
+        mp_init(&q);
+        if (mp_div_small(&q, a, b->digits[0], &rem_small) != SUCCESS) {
+            mp_free(&q);
+            return FAILURE;
+        }
+        mp_free(&q);
+
+        mp_free(r);
+        mp_init(r);
+        if (rem_small == 0) {
+            r->sign = 0; r->length = 0;
+        } else {
+            if (mp_reserve(r, 1) != SUCCESS) return FAILURE;
+            r->digits[0] = rem_small;
+            r->length = 1;
+            r->sign = (a->sign < 0) ? -1 : +1;
+        }
+        return SUCCESS;
+    }
+
+    /* General multi-limb algorithm (word-shift + repeated-doubling subtraction) */
+
+    /* initialize temporaries */
+    mp_init(&rem);
+    mp_init(&tmp);
+    mp_init(&candidate);
+    mp_init(&doubled);
+    mp_init(&newrem);
+
+    /* rem = |a| */
+    if (mp_copy(&rem, a) != SUCCESS) goto cleanup;
+    rem.sign = +1;
+
+    /* tmp = |b| */
+    if (mp_copy(&tmp, b) != SUCCESS) goto cleanup;
+    tmp.sign = +1;
+
+    /* if |rem| < |tmp| -> remainder is a */
+    cmp = mp_cmp_abs(&rem, &tmp);
+    if (cmp < 0) {
+        mp_free(r);
+        mp_init(r);
+        if (mp_copy(r, &rem) != SUCCESS) goto cleanup;
+        r->sign = (a->sign < 0) ? -1 : +1;
+        status = SUCCESS;
+        goto cleanup;
+    }
+
+    /* shift tmp left so its top limb lines up with rem top limb */
+    shift_words = rem.length - tmp.length;
+    if (shift_words > 0) {
+        if (mp_shift_left_words(&tmp, shift_words) != SUCCESS) goto cleanup;
+    }
+
+    /* iterate from current shift down to 0 */
+    for ( ; ; ) {
+        /* while rem >= tmp, subtract the largest multiple of tmp we can get by doubling */
+        while (mp_cmp_abs(&rem, &tmp) >= 0) {
+            /* candidate = tmp */
+            mp_free(&candidate);
+            mp_init(&candidate);
+            if (mp_copy(&candidate, &tmp) != SUCCESS) goto cleanup;
+
+            /* double candidate repeatedly while doubled <= rem */
+            while (1) {
+                mp_free(&doubled);
+                mp_init(&doubled);
+                if (mp_add_abs(&doubled, &candidate, &candidate) != SUCCESS) goto cleanup;
+                /* if doubled > rem break */
+                if (mp_cmp_abs(&doubled, &rem) > 0) {
+                    mp_free(&doubled);
+                    break;
+                }
+                /* accept doubled as new candidate */
+                mp_free(&candidate);
+                mp_init(&candidate);
+                if (mp_copy(&candidate, &doubled) != SUCCESS) goto cleanup;
+                /* loop and try doubling again */
+            }
+
+            /* rem = rem - candidate  (candidate <= rem guaranteed) */
+            mp_free(&newrem);
+            mp_init(&newrem);
+            if (mp_sub_abs(&newrem, &rem, &candidate) != SUCCESS) goto cleanup;
+            /* move newrem -> rem */
+            mp_free(&rem);
+            mp_init(&rem);
+            if (mp_copy(&rem, &newrem) != SUCCESS) goto cleanup;
+            /* free candidate, will be recreated on next iteration if needed */
+            mp_free(&candidate);
+        }
+
+        /* if we've shifted down to zero words stop */
+        if (shift_words == 0) break;
+
+        /* shift tmp right by one word and continue */
+        if (mp_shift_right_words(&tmp, 1) != SUCCESS) goto cleanup;
+        shift_words--;
+    }
+
+    /* rem is the absolute remainder; attach sign of a */
+    mp_free(r);
+    mp_init(r);
+    if (mp_copy(r, &rem) != SUCCESS) goto cleanup;
+    if (r->length == 0) r->sign = 0;
+    else r->sign = (a->sign < 0) ? -1 : +1;
+
+    status = SUCCESS;
+
+cleanup:
+    mp_free(&rem);
+    mp_free(&tmp);
+    mp_free(&candidate);
+    mp_free(&doubled);
+    mp_free(&newrem);
+    return status;
 }
 
 /* ----------------------------------------------- Parsing -------------------------------------------------- */
@@ -515,37 +1050,83 @@ typedef struct {
     int count;
 } TokenList;
 
+/*
+ Tokenizer rules:
+  - Produces tokens that are either:
+      * an operator single-char: "+", "-", "*", "/", "%", "^", "!"
+      * "(" or ")"
+      * a full operand string (may include a leading + or - sign, and hex/bin prefixes)
+  - A leading + / - is considered part of a number when it appears:
+      * at the very start of the expression, or
+      * immediately after '(' or another operator token.
+*/
 static void tokenize(const char *expr, TokenList *out) {
-    const char *p = expr;
-    int i;
+    const char *p;
     char buf[64];
+    int i;
+    int prev_was_operand; /* 0 = start/after-operator/'(', 1 = after-operand or ')' */
 
     out->count = 0;
+    prev_was_operand = 0; /* at start, treat +/ - as sign if they appear */
 
+    p = expr;
     while (*p) {
+        /* skip whitespace */
         while (isspace((unsigned char)*p)) p++;
         if (*p == '\0') break;
 
+        /* safety: don't overflow tokens */
+        if (out->count >= 256) break;
+
+        /* If we see + or - we must decide: operator or sign of number */
+        if ((*p == '+' || *p == '-') && !prev_was_operand) {
+            /* treat + / - as sign for a following number token if next chars form a number */
+            const char *q = p + 1;
+            /* if next is whitespace then it's ambiguous; treat as operator */
+            if (*q != '\0' && !isspace((unsigned char)*q)) {
+                /* gather a number token starting with sign */
+                i = 0;
+                if (i < 63) buf[i++] = *p; /* leading sign */
+                p++; /* consume sign */
+                while (*p && !isspace((unsigned char)*p) && !is_operator(*p) && *p != '(' && *p != ')') {
+                    if (i < 63) buf[i++] = *p;
+                    p++;
+                }
+                buf[i] = '\0';
+                /* store token */
+                strncpy(out->tokens[out->count], buf, 64);
+                out->tokens[out->count][63] = '\0';
+                out->count++;
+                prev_was_operand = 1;
+                continue;
+            }
+            /* else fall through to treat + / - as operator */
+        }
+
+        /* If it's a single-char operator or parentheses, emit operator token */
         if (is_operator(*p) || *p == '(' || *p == ')') {
             out->tokens[out->count][0] = *p;
             out->tokens[out->count][1] = '\0';
             out->count++;
+            /* update prev flag: '(' is not an operand, ')' is */
+            if (*p == '(') prev_was_operand = 0;
+            else if (*p == ')') prev_was_operand = 1;
+            else prev_was_operand = 0; /* operator */
             p++;
-        } else {
-            /* number or identifier */
-            i = 0;
-            while (*p && !isspace((unsigned char)*p)
-                   && !is_operator(*p)
-                   && *p != '(' && *p != ')') {
-                if (i < 63) buf[i++] = *p;
-                p++;
-            }
-            buf[i] = '\0';
-            /* copy into token list */
-            strncpy(out->tokens[out->count], buf, 64);
-            out->tokens[out->count][63] = '\0';
-            out->count++;
+            continue;
         }
+
+        /* Otherwise it's the start of a plain operand token (no leading sign) */
+        i = 0;
+        while (*p && !isspace((unsigned char)*p) && !is_operator(*p) && *p != '(' && *p != ')') {
+            if (i < 63) buf[i++] = *p;
+            p++;
+        }
+        buf[i] = '\0';
+        strncpy(out->tokens[out->count], buf, 64);
+        out->tokens[out->count][63] = '\0';
+        out->count++;
+        prev_was_operand = 1;
     }
 }
 
@@ -558,9 +1139,11 @@ static void to_postfix(TokenList *infix, TokenList *postfix) {
 
     for (i = 0; i < infix->count; ++i) {
         char *tok = infix->tokens[i];
-        if (is_operator(tok[0]) && tok[1] == '\0') {
+        /* operator token (single char) */
+        if (tok[0] != '\0' && tok[1] == '\0' && is_operator(tok[0])) {
             char op = tok[0];
             if (is_unary(op)) {
+                /* postfix unary operators: they behave like operators with precedence */
                 while (sp > 0 && get_precedence(stack[sp-1]) >= get_precedence(op)) {
                     postfix->tokens[postfix->count][0] = stack[--sp];
                     postfix->tokens[postfix->count][1] = '\0';
@@ -568,6 +1151,7 @@ static void to_postfix(TokenList *infix, TokenList *postfix) {
                 }
                 stack[sp++] = op;
             } else {
+                /* binary operator: pop according to precedence/associativity */
                 while (sp > 0) {
                     char top = stack[sp-1];
                     if (is_operator(top) &&
@@ -588,8 +1172,9 @@ static void to_postfix(TokenList *infix, TokenList *postfix) {
                 postfix->tokens[postfix->count][1] = '\0';
                 postfix->count++;
             }
-            if (sp > 0 && stack[sp-1] == '(') sp--;
+            if (sp > 0 && stack[sp-1] == '(') sp--; /* pop '(' */
         } else {
+            /* operand (possibly multi-char) */
             strncpy(postfix->tokens[postfix->count], tok, 64);
             postfix->tokens[postfix->count][63] = '\0';
             postfix->count++;
@@ -603,65 +1188,111 @@ static void to_postfix(TokenList *infix, TokenList *postfix) {
 }
 
 /* ---------- Postfix evaluator ---------- */
-static int eval_postfix(TokenList *postfix, MpInt *result) {
-    MpInt stack[128];
+static int eval_postfix(TokenList *postfix, mp_int *result) {
+    mp_int stack[128];
     int i;
     int sp = 0;
 
     for (i = 0; i < postfix->count; ++i) {
         char *tok = postfix->tokens[i];
-        if (is_operator(tok[0]) && tok[1] == '\0') {
+        /* operator token (single char) */
+        if (tok[0] != '\0' && tok[1] == '\0' && is_operator(tok[0])) {
             char op = tok[0];
             if (is_unary(op)) {
+                /* postfix unary: pop one operand, apply, push result */
                 if (sp < 1) return FAILURE;
-                mp_init(&stack[sp]); /* ensure slot exists */
-                /* pop one operand into a */
-                mp_copy(&stack[sp], &stack[sp-1]);
-                mp_free(&stack[sp-1]);
-                /* evaluate unary */
-                if (op == '!') {
-                    mp_fact(&stack[sp], &stack[sp]);
+                {
+                    mp_int a;
+                    mp_int out;
+                    mp_init(&a); mp_init(&out);
+                    /* pop */
+                    mp_copy(&a, &stack[--sp]);
+                    mp_free(&stack[sp]);
+                    /* evaluate */
+                    if (op == '!') {
+                        if (mp_fact(&out, &a) != SUCCESS) {
+                            mp_free(&a); mp_free(&out); return FAILURE;
+                        }
+                    } else {
+                        /* unknown unary - should not happen */
+                        mp_free(&a); mp_free(&out); return FAILURE;
+                    }
+                    mp_free(&a);
+                    /* push out */
+                    mp_init(&stack[sp]);
+                    mp_copy(&stack[sp], &out);
+                    mp_free(&out);
+                    sp++;
                 }
-                sp = sp + 0; /* stack size unchanged: replaced top-1 with result in place */
             } else {
+                /* binary operator */
                 if (sp < 2) return FAILURE;
-                /* pop b then a; evaluate into stack[sp-2] */
-                mp_init(&stack[sp-2]); /* ensure slots valid */
-                /* we already have copies in stack[sp-2], stack[sp-1] */
-                /* perform operation and store into stack[sp-2] */
-                if (op == '+') {
-                    mp_add(&stack[sp-2], &stack[sp-2], &stack[sp-1]);
-                } else if (op == '-') {
-                    mp_sub(&stack[sp-2], &stack[sp-2], &stack[sp-1]);
-                } else if (op == '*') {
-                    mp_mul(&stack[sp-2], &stack[sp-2], &stack[sp-1]);
-                } else if (op == '/') {
-                    mp_div(&stack[sp-2], &stack[sp-2], &stack[sp-1]);
-                } else if (op == '%') {
-                    mp_mod(&stack[sp-2], &stack[sp-2], &stack[sp-1]);
-                } else if (op == '^') {
-                    mp_pow(&stack[sp-2], &stack[sp-2], &stack[sp-1]);
+                {
+                    mp_int a;
+                    mp_int b;
+                    mp_int out;
+                    mp_init(&a); mp_init(&b); mp_init(&out);
+
+                    /* pop b then a */
+                    mp_copy(&b, &stack[--sp]);
+                    mp_free(&stack[sp]);
+                    mp_copy(&a, &stack[--sp]);
+                    mp_free(&stack[sp]);
+
+                    /* compute out = a op b */
+                    if (op == '+') {
+                        if (mp_add(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
+                    } else if (op == '-') {
+                        if (mp_sub(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
+                    } else if (op == '*') {
+                        if (mp_mul(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
+                    } else if (op == '/') {
+                        if (mp_div(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
+                    } else if (op == '%') {
+                        if (mp_mod(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
+                    } else if (op == '^') {
+                        if (mp_pow(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
+                    } else {
+                        mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE;
+                    }
+
+                    mp_free(&a);
+                    mp_free(&b);
+
+                    /* push result */
+                    mp_init(&stack[sp]);
+                    mp_copy(&stack[sp], &out);
+                    mp_free(&out);
+                    sp++;
                 }
-                /* free the slot stack[sp-1] and reduce stack size by 1 */
-                mp_free(&stack[sp-1]);
-                sp--;
             }
         } else {
             /* operand: parse and push */
+            if (sp >= 128) return FAILURE;
             mp_init(&stack[sp]);
-            if (parse_operand_to_mp(&stack[sp], tok) != SUCCESS)
+            if (parse_operand_to_mp(&stack[sp], tok) != SUCCESS) {
+                /* cleanup partially built stack */
+                int j;
+                for (j = 0; j <= sp; ++j) mp_free(&stack[j]);
                 return FAILURE;
+            }
             sp++;
         }
     }
-    if (sp != 1) return FAILURE;
+
+    if (sp != 1) {
+        int j;
+        for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+        return FAILURE;
+    }
+
     mp_copy(result, &stack[0]);
-    for (i = 0; i < sp; ++i) mp_free(&stack[i]);
+    mp_free(&stack[0]);
     return SUCCESS;
 }
 
 /* ---------- Decimal ---------- */
-int mp_from_str_dec(MpInt *x, const char *str)
+int mp_from_str_dec(mp_int *x, const char *str)
 {
     const char *p;
     int sign;
@@ -706,7 +1337,7 @@ int mp_from_str_dec(MpInt *x, const char *str)
 }
 
 /* ---------- Binary (with implicit sign bit handling) ---------- */
-int mp_from_str_bin(MpInt *x, const char *str) {
+int mp_from_str_bin(mp_int *x, const char *str) {
     size_t i;
     const char *p;
     const char *start;
@@ -728,7 +1359,6 @@ int mp_from_str_bin(MpInt *x, const char *str) {
 
         start = p;
         while (*p == '0') p++;
-        /* size_t len = strlen(p); -- len not used; removed */
 
         if (*p != '0' && *p != '1' && *p != '\0') {
             x->sign = 0; x->length = 0;
@@ -750,8 +1380,8 @@ int mp_from_str_bin(MpInt *x, const char *str) {
         {
             size_t bitwidth = strlen(start);
             if (start[0] == '1') {
-                MpInt pow2;
-                MpInt tmp;
+                mp_int pow2;
+                mp_int tmp;
                 mp_init(&pow2);
                 if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); return FAILURE; }
                 pow2.sign = 1; pow2.digits[0] = 1; pow2.length = 1;
@@ -774,14 +1404,14 @@ int mp_from_str_bin(MpInt *x, const char *str) {
 }
 
 /* ---------- Hexadecimal (with implicit sign bit handling) ---------- */
-int mp_from_str_hex(MpInt *x, const char *str) {
+int mp_from_str_hex(mp_int *x, const char *str) {
     size_t i;
     size_t len;
     const char *start;
     int first_digit;
     size_t bitwidth;
-    MpInt pow2;
-    MpInt tmp;
+    mp_int pow2;
+    mp_int tmp;
     int val;
     const char *p;
 
@@ -849,10 +1479,11 @@ int mp_from_str_hex(MpInt *x, const char *str) {
     return SUCCESS;
 }
 
+
 /* ---------------------------------------------------- Printing ---------------------------------------------------- */
 
 /* Helper: create pow2 = 2^k */
-static int mp_make_pow2(MpInt *pow2, size_t k) {
+static int mp_make_pow2(mp_int *pow2, size_t k) {
     if (!pow2) return FAILURE;
     mp_free(pow2);
     mp_init(pow2);
@@ -868,7 +1499,7 @@ static int mp_make_pow2(MpInt *pow2, size_t k) {
 }
 
 /* Helper: copy absolute value of x into dst (dst initialized by caller) */
-static int mp_abs_copy(MpInt *dst, const MpInt *x) {
+static int mp_abs_copy(mp_int *dst, const mp_int *x) {
     if (!dst || !x) return FAILURE;
     if (mp_copy(dst, x) != SUCCESS) return FAILURE;
     if (dst->length == 0) { dst->sign = 0; return SUCCESS; }
@@ -876,9 +1507,9 @@ static int mp_abs_copy(MpInt *dst, const MpInt *x) {
     return SUCCESS;
 }
 
-/* Prints the MpInt @x in decimal format (unchanged behavior) */
-int mp_print_dec(MpInt *x) {
-    MpInt tmp, q;
+/* Prints the mp_int @x in decimal format (unchanged behavior) */
+int mp_print_dec(mp_int *x) {
+    mp_int tmp, q;
     size_t approx;
     char *buf;
     size_t idx;
@@ -921,9 +1552,9 @@ int mp_print_dec(MpInt *x) {
     return SUCCESS;
 }
 
-/* Prints the MpInt @x in binary (two's complement if negative), minimal width */
-int mp_print_bin(MpInt *x) {
-    MpInt tmp, q;
+/* Prints the mp_int @x in binary (two's complement if negative), minimal width */
+int mp_print_bin(mp_int *x) {
+    mp_int tmp, q;
     size_t approx;
     char *buf;
     size_t idx;
@@ -966,12 +1597,12 @@ int mp_print_bin(MpInt *x) {
     } else {
         /* Negative: choose minimal w such that x >= -2^(w-1) (i.e. fits in w-bit two's complement).
            Then compute val = 2^w + x and print exactly w bits. */
-        MpInt absx;
+        mp_int absx;
         size_t w;
-        MpInt pow;
+        mp_int pow;
         int cmp;
-        MpInt poww, val;
-        MpInt q2;
+        mp_int poww, val;
+        mp_int q2;
         mp_init(&absx);
         if (mp_abs_copy(&absx, x) != SUCCESS) { mp_free(&absx); return FAILURE; }
 
@@ -1030,14 +1661,14 @@ int mp_print_bin(MpInt *x) {
     }
 }
 
-/* Prints the MpInt @x in hexadecimal (two's complement if negative), minimal nibble width */
-int mp_print_hex(MpInt *x) {
-    MpInt tmp;
+/* Prints the mp_int @x in hexadecimal (two's complement if negative), minimal nibble width */
+int mp_print_hex(mp_int *x) {
+    mp_int tmp;
     size_t approx;
     char *buf;
     size_t idx;
     unsigned int rem;
-    MpInt q2;
+    mp_int q2;
 
     if (!x) return FAILURE;
     if (x->sign == 0) { printf("0x0"); return SUCCESS; }
@@ -1074,12 +1705,12 @@ int mp_print_hex(MpInt *x) {
         return SUCCESS;
     } else {
         /* Negative: pick minimal number of nibbles (4-bit groups) so that x fits in that many bits */
-        MpInt absx;
+        mp_int absx;
         size_t w;
-        MpInt pow;
+        mp_int pow;
         int cmp;
         size_t nibbles, bits;
-        MpInt powb, val;
+        mp_int powb, val;
         mp_init(&absx);
         if (mp_abs_copy(&absx, x) != SUCCESS) { mp_free(&absx); return FAILURE; }
 
@@ -1142,7 +1773,7 @@ int mp_print_hex(MpInt *x) {
 int process_file(char str[]) {
     FILE *f;
     char line[1024];
-    MpInt val;
+    mp_int val;
 
     if (!str) return FAILURE;
     f = fopen(str, "r");
@@ -1261,7 +1892,7 @@ int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs
 }
 
 /* parse_operand_to_mp: parses a single operand string into dst (auto detects base) */
-int parse_operand_to_mp(MpInt *dst, const char *s) {
+int parse_operand_to_mp(mp_int *dst, const char *s) {
     char buf[1024];
     if (!dst || !s) return FAILURE;
     /* trim into local buffer */
@@ -1285,10 +1916,10 @@ int parse_operand_to_mp(MpInt *dst, const char *s) {
 
 int main(int argc, char *argv[]) {
     /* Format selection */
-    int (*mp_print[])(MpInt *) = { mp_print_dec, mp_print_bin, mp_print_hex };
+    int (*mp_print[])(mp_int *) = { mp_print_dec, mp_print_bin, mp_print_hex };
     int print_format = DEC;
 
-    MpInt a, b, c;
+    mp_int a, b, c;
     char input_file[300];
     char buf[1024];
     TokenList infix, postfix;
@@ -1310,7 +1941,7 @@ int main(int argc, char *argv[]) {
     mp_init(&c);
 
     while (1) {
-        printf(">>> ");
+        printf("> ");
         if (!fgets(buf, sizeof(buf), stdin)) break;
 
         /* trim newline */
@@ -1328,14 +1959,17 @@ int main(int argc, char *argv[]) {
 
         if (strcmp(p, "bin") == 0) {
             print_format = BIN;
+            printf("bin\n");
             continue;
         }
         if (strcmp(p, "hex") == 0) {
             print_format = HEX;
+            printf("hex\n");
             continue;
         }
         if (strcmp(p, "dec") == 0) {
             print_format = DEC;
+            printf("dec\n");
             continue;
         }
         if (strcmp(p, "out") == 0) {
@@ -1364,13 +1998,21 @@ int main(int argc, char *argv[]) {
         mp_free(&c);
         mp_init(&c);
         if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
-            if (mp_from_str_hex(&c, p) != SUCCESS) { printf("parse error\n"); continue; }
+            if (mp_from_str_hex(&c, p) != SUCCESS) { 
+                printf("parse error\n"); 
+                continue; 
+            }
         } else if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) {
-            if (mp_from_str_bin(&c, p) != SUCCESS) { printf("parse error\n"); continue; }
+            if (mp_from_str_bin(&c, p) != SUCCESS) { 
+                printf("parse error\n"); 
+                continue; 
+            }
         } else {
-            if (mp_from_str_dec(&c, p) != SUCCESS) { printf("parse error\n"); continue; }
+            if (mp_from_str_dec(&c, p) != SUCCESS) { 
+                printf("parse error\n"); 
+                continue; 
+            }
         }
-        /*mp_print[print_format](&c);*/
         putchar('\n');
     }
 
