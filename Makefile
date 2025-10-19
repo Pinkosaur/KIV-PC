@@ -1,10 +1,25 @@
 CC = gcc
-CFLAGS = -Wall -pedantic -ansi -Wextra -O2
+CFLAGS = -Wall -pedantic -ansi -Wextra -O2 -Iinclude
 BIN = calc.exe
-OBJ = calc.o
 
-%.o: src/%.c
-	$(CC) -c $(CFLAGS) $< -o build/$@
+SRCDIR = src
+BUILDDIR = build
 
-$(BIN): $(OBJ)
-	$(CC) build/$^ -o $@
+SRCS = mp_int.c mp_print.c parser.c exp.c fact.c main.c
+OBJS = $(patsubst %.c,$(BUILDDIR)/%.o,$(SRCS))
+
+.PHONY: all clean dirs
+
+all: dirs $(BIN)
+
+dirs:
+	@mkdir -p $(BUILDDIR)
+
+$(BUILDDIR)/%.o: $(SRCDIR)/%.c
+	$(CC) -c $(CFLAGS) $< -o $@
+
+$(BIN): $(OBJS)
+	$(CC) $(CFLAGS) $(OBJS) -o $(BIN)
+
+clean:
+	rm -rf $(BUILDDIR) $(BIN)
