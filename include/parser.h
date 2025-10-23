@@ -16,9 +16,9 @@ typedef struct {
     int unary;
 } OpInfo;
 
-static void tokenize(const char *expr, TokenList *out);
-static void to_postfix(TokenList *infix, TokenList *postfix);
-static int eval_postfix(TokenList *postfix, mp_int *result);
+void tokenize(const char *expr, TokenList *out);
+void to_postfix(TokenList *infix, TokenList *postfix);
+int eval_postfix(TokenList *postfix, mp_int *result);
 
 /* helper used by parser */
 int parse_operand_to_mp(mp_int *dst, const char *s);

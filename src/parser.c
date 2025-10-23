@@ -5,6 +5,8 @@
 #include "parser.h"
 #include "mp_int.h"
 #include "mp_print.h"     /* if process_file prints results */
+#include "exp.h"
+#include "fact.h"
 
 
 static int is_operator(char c) {
@@ -64,7 +66,7 @@ static int is_unary(char op) {
       * at the very start of the expression, or
       * immediately after '(' or another operator token.
 */
-static void tokenize(const char *expr, TokenList *out) {
+void tokenize(const char *expr, TokenList *out) {
     const char *p;
     char buf[64];
     int i;
@@ -135,7 +137,7 @@ static void tokenize(const char *expr, TokenList *out) {
 }
 
 /* ---------- Shunting Yard: infix -> postfix ---------- */
-static void to_postfix(TokenList *infix, TokenList *postfix) {
+void to_postfix(TokenList *infix, TokenList *postfix) {
     char stack[256];
     int i;
     int sp = 0;
@@ -192,7 +194,7 @@ static void to_postfix(TokenList *infix, TokenList *postfix) {
 }
 
 /* ---------- Postfix evaluator ---------- */
-static int eval_postfix(TokenList *postfix, mp_int *result) {
+int eval_postfix(TokenList *postfix, mp_int *result) {
     mp_int stack[128];
     int i;
     int sp = 0;
@@ -362,25 +364,40 @@ int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs
 }
 
 /* parse_operand_to_mp: parses a single operand string into dst (auto detects base) */
+/* parse_operand_to_mp: parses a single operand string into dst (auto detects base)
+   Accepts operands that may start with an optional + or - sign, followed by
+   decimal, 0b... binary, or 0x... hex. */
 int parse_operand_to_mp(mp_int *dst, const char *s) {
     char buf[1024];
+    const char *q;
+    int status;
+
     if (!dst || !s) return FAILURE;
+
     /* trim into local buffer */
     strncpy(buf, s, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
     trim_inplace(buf);
     if (buf[0] == '\0') return FAILURE;
 
-    /* detect base and call appropriate parser */
-    if (buf[0] == '0' && (buf[1] == 'x' || buf[1] == 'X')) {
-        return mp_from_str_hex(dst, buf);
-    } else if (buf[0] == '0' && (buf[1] == 'b' || buf[1] == 'B')) {
-        return mp_from_str_bin(dst, buf);
+    /* Look past optional leading sign to detect 0x/0b prefixes */
+    q = buf;
+    if (*q == '+' || *q == '-') q++;
+
+    /* Now test the prefix at q */
+    if (q[0] == '0' && (q[1] == 'x' || q[1] == 'X')) {
+        status = mp_from_str_hex(dst, buf);
+        return status;
+    } else if (q[0] == '0' && (q[1] == 'b' || q[1] == 'B')) {
+        status = mp_from_str_bin(dst, buf);
+        return status;
     } else {
         /* default decimal (handles leading + / -) */
-        return mp_from_str_dec(dst, buf);
+        status = mp_from_str_dec(dst, buf);
+        return status;
     }
 }
+
 
 /* ------------------------------------------------- File processing ----------------------------------------------- */
 
@@ -475,66 +492,87 @@ int mp_from_str_dec(mp_int *x, const char *str)
 
 /* ---------- Binary (with implicit sign bit handling) ---------- */
 int mp_from_str_bin(mp_int *x, const char *str) {
+    /* ANSI C90 declarations at top */
     size_t i;
     const char *p;
-    const char *start;
+    const char *digits;
+    size_t digits_len;
     unsigned int bit;
+    int explicit_sign = +1;
 
     if (!x || !str) return FAILURE;
     mp_free(x);
     mp_init(x);
 
+    /* skip leading whitespace */
     p = str;
     while (isspace((unsigned char)*p)) p++;
 
-    {
-        int explicit_sign = +1;
-        if (*p == '-') { explicit_sign = -1; p++; }
-        else if (*p == '+') { p++; }
+    /* optional explicit sign */
+    if (*p == '-') { explicit_sign = -1; p++; }
+    else if (*p == '+') { p++; }
 
-        if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) p += 2;
+    /* optional 0b/0B prefix */
+    if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) p += 2;
 
-        start = p;
-        while (*p == '0') p++;
+    /* collect contiguous binary digits */
+    digits = p;
+    digits_len = 0;
+    while (p[digits_len] == '0' || p[digits_len] == '1') digits_len++;
 
-        if (*p != '0' && *p != '1' && *p != '\0') {
-            x->sign = 0; x->length = 0;
-            return SUCCESS;
+    if (digits_len == 0) {
+        /* no binary digits -> treat as zero/invalid */
+        x->sign = 0;
+        x->length = 0;
+        return SUCCESS;
+    }
+
+    /* initialize x = 0 */
+    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
+    x->digits[0] = 0;
+    x->length = 1;
+    x->sign = 1; /* magnitude building */
+
+    /* parse digits left-to-right */
+    for (i = 0; i < digits_len; ++i) {
+        bit = (unsigned int)(digits[i] - '0');
+        if (mp_mul_small(x, 2U) != SUCCESS) return FAILURE;
+        if (mp_add_small(x, bit) != SUCCESS) return FAILURE;
+    }
+
+    /* two's complement detection: if the highest provided bit is 1, interpret as negative value
+       (value = magnitude - 2^digits_len). */
+    if (digits[0] == '1') {
+        mp_int pow2;
+        mp_int tmp;
+
+        mp_init(&pow2);
+        mp_init(&tmp);
+
+        /* pow2 = 2^digits_len */
+        if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+        pow2.digits[0] = 1;
+        pow2.length = 1;
+        pow2.sign = 1;
+        for (i = 0; i < digits_len; ++i) {
+            if (mp_mul_small(&pow2, 2U) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
         }
 
-        if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
-        x->digits[0] = 0;
-        x->length = 1;
+        /* tmp = x - pow2  (may be negative) */
+        if (mp_sub(&tmp, x, &pow2) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
 
-        for (; *p; ++p) {
-            if (*p != '0' && *p != '1') break;
-            bit = (unsigned int)(*p - '0');
-            if (mp_mul_small(x, 2U) != SUCCESS) return FAILURE;
-            if (mp_add_small(x, bit) != SUCCESS) return FAILURE;
-        }
+        /* copy tmp back into x */
+        mp_free(x);
+        mp_init(x);
+        if (mp_copy(x, &tmp) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
 
-        /* Two's complement detection */
-        {
-            size_t bitwidth = strlen(start);
-            if (start[0] == '1') {
-                mp_int pow2;
-                mp_int tmp;
-                mp_init(&pow2);
-                if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); return FAILURE; }
-                pow2.sign = 1; pow2.digits[0] = 1; pow2.length = 1;
+        mp_free(&pow2);
+        mp_free(&tmp);
+    }
 
-                for (i = 0; i < bitwidth; ++i)
-                    mp_mul_small(&pow2, 2U);
-                mp_init(&tmp);
-                mp_sub(&tmp, x, &pow2);
-                mp_copy(x, &tmp);
-                mp_free(&pow2);
-                mp_free(&tmp);
-            }
-        }
-
-        if (explicit_sign == -1)
-            x->sign = -x->sign;
+    /* apply explicit sign: explicit '-' flips the computed sign (even if two's-complement produced negative) */
+    if (explicit_sign == -1) {
+        x->sign = -x->sign;
     }
 
     return SUCCESS;
@@ -542,76 +580,95 @@ int mp_from_str_bin(mp_int *x, const char *str) {
 
 /* ---------- Hexadecimal (with implicit sign bit handling) ---------- */
 int mp_from_str_hex(mp_int *x, const char *str) {
+    /* ANSI C90 declarations at top */
     size_t i;
-    size_t len;
-    const char *start;
-    int first_digit;
-    size_t bitwidth;
-    mp_int pow2;
-    mp_int tmp;
-    int val;
     const char *p;
+    const char *digits;
+    size_t digits_len;
+    int val;
+    int explicit_sign = +1;
+    int first_nibble;
 
     if (!x || !str) return FAILURE;
     mp_free(x);
     mp_init(x);
 
+    /* skip leading whitespace */
     p = str;
     while (isspace((unsigned char)*p)) p++;
 
-    {
-        int explicit_sign = +1;
-        if (*p == '-') { explicit_sign = -1; p++; }
-        else if (*p == '+') { p++; }
+    /* optional explicit sign */
+    if (*p == '-') { explicit_sign = -1; p++; }
+    else if (*p == '+') { p++; }
 
-        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+    /* optional 0x/0X prefix */
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
 
-        start = p;
-        while (*p == '0') p++;
-        len = strlen(p);
+    /* collect contiguous hex digits */
+    digits = p;
+    digits_len = 0;
+    while (isxdigit((unsigned char)p[digits_len])) digits_len++;
 
-        if (!isxdigit((unsigned char)*p)) {
-            x->sign = 0; x->length = 0;
-            return SUCCESS;
-        }
-
-        if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
-        x->digits[0] = 0;
-        x->length = 1;
-
-        for (; *p; ++p) {
-            if (isdigit((unsigned char)*p)) val = *p - '0';
-            else if (isupper((unsigned char)*p)) val = *p - 'A' + 10;
-            else val = *p - 'a' + 10;
-            if (!isxdigit((unsigned char)*p)) break;
-            if (mp_mul_small(x, 16U) != SUCCESS) return FAILURE;
-            if (mp_add_small(x, (unsigned int)val) != SUCCESS) return FAILURE;
-        }
-
-        /* Two's complement detection */
-        first_digit = 0;
-        if (isxdigit((unsigned char)start[0])) {
-            if (isdigit((unsigned char)start[0])) first_digit = start[0] - '0';
-            else if (isupper((unsigned char)start[0])) first_digit = start[0] - 'A' + 10;
-            else first_digit = start[0] - 'a' + 10;
-        }
-        bitwidth = len * 4;
-        if (first_digit & 0x8) {
-            mp_init(&pow2);
-            if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); return FAILURE; }
-            pow2.sign = 1; pow2.digits[0] = 1; pow2.length = 1;
-            for (i = 0; i < bitwidth; ++i)
-                mp_mul_small(&pow2, 2U);
-            mp_init(&tmp);
-            mp_sub(&tmp, x, &pow2);
-            mp_copy(x, &tmp);
-            mp_free(&pow2);
-            mp_free(&tmp);
-        }
-
-        if (explicit_sign == -1)
-            x->sign = -x->sign;
+    if (digits_len == 0) {
+        x->sign = 0;
+        x->length = 0;
+        return SUCCESS;
     }
+
+    /* initialize x = 0 */
+    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
+    x->digits[0] = 0;
+    x->length = 1;
+    x->sign = 1;
+
+    for (i = 0; i < digits_len; ++i) {
+        char c = digits[i];
+        if (isdigit((unsigned char)c)) val = c - '0';
+        else if (isupper((unsigned char)c)) val = c - 'A' + 10;
+        else val = c - 'a' + 10;
+
+        if (mp_mul_small(x, 16U) != SUCCESS) return FAILURE;
+        if (mp_add_small(x, (unsigned int)val) != SUCCESS) return FAILURE;
+    }
+
+    /* detect sign-bit from first nibble */
+    first_nibble = 0;
+    if (isxdigit((unsigned char)digits[0])) {
+        char c = digits[0];
+        if (isdigit((unsigned char)c)) first_nibble = c - '0';
+        else if (isupper((unsigned char)c)) first_nibble = c - 'A' + 10;
+        else first_nibble = c - 'a' + 10;
+    }
+
+    if (first_nibble & 0x8) {
+        /* interpret as two's complement negative: x = x - 2^(4*digits_len) */
+        mp_int pow2;
+        mp_int tmp;
+        mp_init(&pow2);
+        mp_init(&tmp);
+
+        if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+        pow2.digits[0] = 1;
+        pow2.length = 1;
+        pow2.sign = 1;
+
+        /* pow2 = 2^(4 * digits_len) */
+        for (i = 0; i < (4 * digits_len); ++i) {
+            if (mp_mul_small(&pow2, 2U) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+        }
+
+        if (mp_sub(&tmp, x, &pow2) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+
+        mp_free(x);
+        mp_init(x);
+        if (mp_copy(x, &tmp) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+
+        mp_free(&pow2);
+        mp_free(&tmp);
+    }
+
+    /* apply explicit sign if present */
+    if (explicit_sign == -1) x->sign = -x->sign;
 
     return SUCCESS;
 }

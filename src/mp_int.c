@@ -337,11 +337,6 @@ int mp_shift_right_words(mp_int *x, size_t k) {
     return SUCCESS;
 }
 
-static int mp_is_zero(const mp_int *x) {
-    if (!x) return 1;
-    return (x->length == 0 || x->sign == 0) ? 1 : 0;
-}
-
 void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m) {
     size_t i;
 
@@ -364,6 +359,11 @@ void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m) {
         high->length = 0;
         high->sign = 0;
     }
+}
+
+static int mp_is_zero(const mp_int *x) {
+    if (!x) return 1;
+    return (x->length == 0 || x->sign == 0) ? 1 : 0;
 }
 
 /* Karatsuba multiply (recursive) */
@@ -437,17 +437,197 @@ int mp_mul(mp_int *result, const mp_int *a, const mp_int *b) {
         return mp_karatsuba_mul(result, a, b);
 }
 
-/* Divides mp_int b by mp_int a */
-/* Note: full long division is not implemented; only small divisor supported via mp_div_small */
+/* mp_div: result = a / b (integer division).  ANSI C90-compliant.
+   Quotient sign follows a->sign * b->sign. Returns SUCCESS/FAILURE. */
 int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
+    /* declarations (C90) */
+    mp_int rem;
+    mp_int tmp;         /* shifted divisor */
+    mp_int candidate;
+    mp_int doubled;
+    mp_int newrem;
+    mp_int quotient;
+    mp_int mult;        /* multiplier for candidate (power-of-two) */
+    mp_int newq;
+    size_t shift_words;
+    int status = FAILURE;
+    size_t i;
+
     if (!result || !a || !b) return FAILURE;
-    /* If divisor is a single limb, use mp_div_small */
-    if (b->length == 1) {
-        unsigned int rem;
-        return mp_div_small(result, a, b->digits[0], &rem);
+
+    /* divisor zero */
+    if (b->length == 0 || b->sign == 0) return FAILURE;
+
+    /* dividend zero -> quotient zero */
+    if (a->length == 0 || a->sign == 0) {
+        mp_free(result);
+        mp_init(result);
+        result->sign = 0;
+        result->length = 0;
+        return SUCCESS;
     }
-    return FAILURE; /* not implemented */
+
+    /* Fast path: single-limb divisor -> use mp_div_small and adjust sign */
+    if (b->length == 1) {
+        mp_int q;
+        unsigned int rem_small;
+        mp_init(&q);
+        if (mp_div_small(&q, a, b->digits[0], &rem_small) != SUCCESS) {
+            mp_free(&q);
+            return FAILURE;
+        }
+        /* mp_div_small set q.sign = a->sign; we need quotient sign = a->sign * b->sign */
+        if (q.length == 0) q.sign = 0;
+        else q.sign = (a->sign * b->sign);
+        mp_free(result);
+        mp_init(result);
+        if (mp_copy(result, &q) != SUCCESS) { mp_free(&q); return FAILURE; }
+        mp_free(&q);
+        return SUCCESS;
+    }
+
+    /* General multi-limb divisor */
+
+    /* initialize temporaries */
+    mp_init(&rem);
+    mp_init(&tmp);
+    mp_init(&candidate);
+    mp_init(&doubled);
+    mp_init(&newrem);
+    mp_init(&quotient);
+    mp_init(&mult);
+    mp_init(&newq);
+
+    /* rem = |a| */
+    if (mp_copy(&rem, a) != SUCCESS) goto cleanup;
+    rem.sign = +1;
+
+    /* tmp = |b| */
+    if (mp_copy(&tmp, b) != SUCCESS) goto cleanup;
+    tmp.sign = +1;
+
+    /* If |rem| < |tmp| -> quotient = 0 */
+    if (mp_cmp_abs(&rem, &tmp) < 0) {
+        mp_free(result);
+        mp_init(result);
+        /* quotient = 0 */
+        result->sign = 0;
+        result->length = 0;
+        status = SUCCESS;
+        goto cleanup;
+    }
+
+    /* shift tmp left so its top limb lines up with rem top limb */
+    shift_words = 0;
+    if (rem.length > tmp.length)
+        shift_words = rem.length - tmp.length;
+    if (shift_words > 0) {
+        if (mp_shift_left_words(&tmp, shift_words) != SUCCESS) goto cleanup;
+    }
+
+    /* quotient = 0 */
+    quotient.length = 0;
+    quotient.sign = 0;
+
+    /* Iterate from current shift down to 0 */
+    for ( ; ; ) {
+        /* while rem >= tmp, subtract the largest multiple of tmp we can get by doubling.
+           For each subtraction we add the corresponding 'mult' to the quotient. */
+        while (mp_cmp_abs(&rem, &tmp) >= 0) {
+            /* candidate = tmp */
+            mp_free(&candidate);
+            mp_init(&candidate);
+            if (mp_copy(&candidate, &tmp) != SUCCESS) goto cleanup;
+
+            /* mult = 1 << (32 * shift_words)  (i.e. a limb with 1 at index shift_words) */
+            mp_free(&mult);
+            mp_init(&mult);
+            if (mp_reserve(&mult, shift_words + 1) != SUCCESS) goto cleanup;
+            /* zero-fill */
+            for (i = 0; i < shift_words; ++i) mult.digits[i] = 0U;
+            mult.digits[shift_words] = 1U;
+            mult.length = shift_words + 1;
+            mult.sign = +1;
+
+            /* doubl = candidate * 2, mult *= 2 repeatedly while doubled <= rem */
+            for (;;) {
+                mp_free(&doubled);
+                mp_init(&doubled);
+                if (mp_add_abs(&doubled, &candidate, &candidate) != SUCCESS) goto cleanup;
+
+                /* if doubled > rem -> stop doubling */
+                if (mp_cmp_abs(&doubled, &rem) > 0) {
+                    mp_free(&doubled);
+                    break;
+                }
+
+                /* accept doubled as new candidate */
+                mp_free(&candidate);
+                mp_init(&candidate);
+                if (mp_copy(&candidate, &doubled) != SUCCESS) goto cleanup;
+
+                /* mult = mult + mult (i.e. multiply by two) */
+                mp_free(&newq);
+                mp_init(&newq);
+                if (mp_add_abs(&newq, &mult, &mult) != SUCCESS) goto cleanup;
+                mp_free(&mult);
+                mp_init(&mult);
+                if (mp_copy(&mult, &newq) != SUCCESS) goto cleanup;
+                mp_free(&newq);
+            }
+
+            /* rem = rem - candidate */
+            mp_free(&newrem);
+            mp_init(&newrem);
+            if (mp_sub_abs(&newrem, &rem, &candidate) != SUCCESS) goto cleanup;
+            mp_free(&rem);
+            mp_init(&rem);
+            if (mp_copy(&rem, &newrem) != SUCCESS) goto cleanup;
+
+            /* quotient = quotient + mult */
+            mp_free(&newq);
+            mp_init(&newq);
+            if (mp_add_abs(&newq, &quotient, &mult) != SUCCESS) goto cleanup;
+            mp_free(&quotient);
+            mp_init(&quotient);
+            if (mp_copy(&quotient, &newq) != SUCCESS) goto cleanup;
+            mp_free(&newq);
+
+            /* free candidate and mult for next iteration */
+            mp_free(&candidate);
+            mp_free(&mult);
+            /* loop while rem >= tmp */
+        }
+
+        /* if we've shifted down to zero words stop */
+        if (shift_words == 0) break;
+
+        /* shift tmp right by one word and continue */
+        if (mp_shift_right_words(&tmp, 1) != SUCCESS) goto cleanup;
+        shift_words--;
+    }
+
+    /* set result = quotient with proper sign = a->sign * b->sign */
+    mp_free(result);
+    mp_init(result);
+    if (mp_copy(result, &quotient) != SUCCESS) goto cleanup;
+    if (result->length == 0) result->sign = 0;
+    else result->sign = (a->sign * b->sign);
+
+    status = SUCCESS;
+
+cleanup:
+    mp_free(&rem);
+    mp_free(&tmp);
+    mp_free(&candidate);
+    mp_free(&doubled);
+    mp_free(&newrem);
+    mp_free(&quotient);
+    mp_free(&mult);
+    mp_free(&newq);
+    return status;
 }
+
 
 /* mp_mod: r = a % b
    Remainder has same sign as 'a' (like C's %). Uses only ANSI C90 features. */
