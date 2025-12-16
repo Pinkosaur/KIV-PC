@@ -3,7 +3,6 @@
 #include <string.h>
 #include "mp_int.h"
 #include "fact.h"
-#include "precomputed_fact.h"
 
 /* ----------------- Factorial using precomputed table + productRange ----------------- */
 
@@ -157,8 +156,8 @@ int mp_fact(mp_int *r, const mp_int *a) {
 
     /* negative input -> error */
     if (a->sign < 0) {
-        fprintf(stderr, "error: factorial of negative number\n");
-        return FAILURE;
+        fprintf(stderr, "Input of factorial must not be negative!\n");
+        return FAILURE; 
     }
 
     /* convert to uint32 */
