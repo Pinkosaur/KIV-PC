@@ -1,14 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "parser.h"
 #include "mp_print.h"
 #include "mp_int.h"
-
-/* Output format selectors */
-#define DEC 0
-#define BIN 1
-#define HEX 2
 
 int main(int argc, char *argv[]) {
     /* Format selection */

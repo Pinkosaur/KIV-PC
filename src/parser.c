@@ -4,7 +4,7 @@
 #include <ctype.h>
 #include "parser.h"
 #include "mp_int.h"
-#include "mp_print.h"     /* if process_file prints results */
+#include "mp_print.h"
 #include "exp.h"
 #include "fact.h"
 
@@ -86,27 +86,79 @@ void tokenize(const char *expr, TokenList *out) {
 
         /* If we see + or - we must decide: operator or sign of number */
         if ((*p == '+' || *p == '-') && !prev_was_operand) {
-            /* treat + / - as sign for a following number token if next chars form a number */
+            /* decide whether this is a sign attached to a number, or a unary operator before '(',
+               or an operator token. We treat:
+                 - sign + number/0x/0b -> gather signed-number token
+                 - sign followed (possibly after spaces) by '(' -> rewrite as "0" and the binary operator
+                 - otherwise treat as operator
+            */
             const char *q = p + 1;
-            /* if next is whitespace then it's ambiguous; treat as operator */
+            /* skip spaces when checking for parentheses case */
+            while (isspace((unsigned char)*q)) q++;
+            if (*q == '(') {
+                /* rewrite "-("  -> tokens "0" "-" "("   (and similarly for "+(") */
+                /* emit "0" token */
+                strncpy(out->tokens[out->count], "0", 64);
+                out->tokens[out->count][63] = '\0';
+                out->count++;
+                /* emit operator token (+ or -) */
+                out->tokens[out->count][0] = *p;
+                out->tokens[out->count][1] = '\0';
+                out->count++;
+                /* operator leaves prev_was_operand = 0 (already) */
+                p++; /* consume the sign character, next loop will handle the '(' */
+                continue;
+            }
+
+            /* If next char is not whitespace and looks like start of a number, gather a signed-number token */
+            /* If sign before number: check whether this number is immediately followed by '!' */
+            q = p + 1;
             if (*q != '\0' && !isspace((unsigned char)*q)) {
-                /* gather a number token starting with sign */
+                const char *r = q;
+
+                /* scan number body */
+                while (*r && !isspace((unsigned char)*r) &&
+                    !is_operator(*r) && *r != '(' && *r != ')') {
+                    r++;
+                }
+
+                /* If next non-space char is '!', DO NOT absorb sign into number */
+                {
+                    const char *s = r;
+                    while (isspace((unsigned char)*s)) s++;
+                    if (*s == '!') {
+                        /* rewrite "-49!" as "0 - 49 !" */
+                        strncpy(out->tokens[out->count], "0", 64);
+                        out->tokens[out->count][63] = '\0';
+                        out->count++;
+
+                        out->tokens[out->count][0] = *p; /* '+' or '-' */
+                        out->tokens[out->count][1] = '\0';
+                        out->count++;
+
+                        p++; /* consume sign, number will be read normally */
+                        continue;
+                    }
+                }
+
+                /* Otherwise: signed literal is allowed */
                 i = 0;
-                if (i < 63) buf[i++] = *p; /* leading sign */
-                p++; /* consume sign */
-                while (*p && !isspace((unsigned char)*p) && !is_operator(*p) && *p != '(' && *p != ')') {
+                if (i < 63) buf[i++] = *p;
+                p++;
+                while (*p && !isspace((unsigned char)*p) &&
+                    !is_operator(*p) && *p != '(' && *p != ')') {
                     if (i < 63) buf[i++] = *p;
                     p++;
                 }
                 buf[i] = '\0';
-                /* store token */
+
                 strncpy(out->tokens[out->count], buf, 64);
                 out->tokens[out->count][63] = '\0';
                 out->count++;
                 prev_was_operand = 1;
                 continue;
             }
-            /* else fall through to treat + / - as operator */
+            /* else fall through to treat + / - as a plain operator token */
         }
 
         /* If it's a single-char operator or parentheses, emit operator token */
@@ -135,6 +187,7 @@ void tokenize(const char *expr, TokenList *out) {
         prev_was_operand = 1;
     }
 }
+
 
 /* ---------- Shunting Yard: infix -> postfix ---------- */
 void to_postfix(TokenList *infix, TokenList *postfix) {
@@ -405,45 +458,86 @@ int parse_operand_to_mp(mp_int *dst, const char *s) {
 int process_file(char str[]) {
     FILE *f;
     char line[1024];
-    mp_int val;
+    TokenList infix, postfix;
+    mp_int result;
+    int print_format = DEC;
+    int (*mp_print[])(mp_int *) = { mp_print_dec, mp_print_bin, mp_print_hex };
 
     if (!str) return FAILURE;
     f = fopen(str, "r");
-    if (!f) return FAILURE;
-    mp_init(&val);
-
-    while (fgets(line, sizeof(line), f)) {
-        /* trim newline */
-        size_t L = strlen(line);
-        while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r')) { line[--L] = '\0'; }
-
-        if (L == 0) continue;
-        /* detect hex or bin prefix */
-        if (line[0] == '0' && (line[1] == 'x' || line[1] == 'X')) {
-            if (mp_from_str_hex(&val, line) == SUCCESS) {
-                mp_print_hex(&val); putchar('\n');
-            } else {
-                printf("parse error: %s\n", line);
-            }
-        } else if (line[0] == '0' && (line[1] == 'b' || line[1] == 'B')) {
-            if (mp_from_str_bin(&val, line) == SUCCESS) {
-                mp_print_bin(&val); putchar('\n');
-            } else {
-                printf("parse error: %s\n", line);
-            }
-        } else {
-            if (mp_from_str_dec(&val, line) == SUCCESS) {
-                mp_print_dec(&val); putchar('\n');
-            } else {
-                printf("parse error: %s\n", line);
-            }
-        }
+    if (!f) {
+        printf("Invalid input file!\n");
+        exit(EXIT_FAILURE);
     }
 
-    mp_free(&val);
+    mp_init(&result);
+
+    while (fgets(line, sizeof(line), f)) {
+        size_t L = strlen(line);
+        /* Trim newline / CR */
+        while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r')) { line[--L] = '\0'; }
+
+        /* Trim leading/trailing whitespace in place (uses existing helper) */
+        trim_inplace(line);
+
+        /* Skip empty lines */
+        if (line[0] == '\0') continue;
+
+        /* Echo input line */
+        printf("> %s\n", line);
+
+        /* File-local commands (mirror interactive REPL commands) */
+        if (strcmp(line, "bin") == 0) {
+            print_format = BIN;
+            printf("bin\n");
+            continue;
+        }
+        if (strcmp(line, "hex") == 0) {
+            print_format = HEX;
+            printf("hex\n");
+            continue;
+        }
+        if (strcmp(line, "dec") == 0) {
+            print_format = DEC;
+            printf("dec\n");
+            continue;
+        }
+        if (strcmp(line, "out") == 0) {
+            switch (print_format) {
+                case DEC: printf("dec\n"); break;
+                case BIN: printf("bin\n"); break;
+                case HEX: printf("hex\n"); break;
+                default: printf("dec\n"); break;
+            }
+            continue;
+        }
+
+        /* Otherwise treat the line as an expression and evaluate it */
+        tokenize(line, &infix);
+        to_postfix(&infix, &postfix);
+
+        /* Ensure result is initialized for mp_copy inside eval_postfix */
+        mp_free(&result);
+        mp_init(&result);
+
+        if (eval_postfix(&postfix, &result) == SUCCESS) {
+            /* print using current print_format */
+            mp_print[print_format](&result);
+            putchar('\n');
+        } else {
+            printf("parse or eval error\n");
+        }
+
+        /* clean result and continue */
+        mp_free(&result);
+        mp_init(&result);
+    }
+
+    mp_free(&result);
     fclose(f);
     return SUCCESS;
 }
+
 
 /* ---------- Decimal ---------- */
 int mp_from_str_dec(mp_int *x, const char *str)

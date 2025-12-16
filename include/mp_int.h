@@ -7,6 +7,11 @@
 #define SUCCESS 1
 #define FAILURE 0
 
+/* Output format selectors */
+#define DEC 0
+#define BIN 1
+#define HEX 2
+
 typedef struct {
     int sign;
     unsigned int *digits;
