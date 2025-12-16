@@ -150,6 +150,21 @@ int mp_div_small(mp_int *result, const mp_int *a, unsigned int divisor, unsigned
     return SUCCESS;
 }
 
+int mp_inc(mp_int *x)
+{
+    if (!x) return FAILURE;
+    return mp_add_small(x, 1U);
+}
+
+int mp_fits_uint(const mp_int *x)
+{
+    if (!x) return 0;
+    if (x->sign < 0) return 0;
+    if (x->length == 0) return 1;
+    if (x->length > 1) return 0;
+    return 1;
+}
+
 /* Compare absolute values of two mp_ints */
 /* Returns 1 if a is greater, -1 if b is greater, otherwise 0 */
 int mp_cmp_abs(const mp_int *a, const mp_int *b) {

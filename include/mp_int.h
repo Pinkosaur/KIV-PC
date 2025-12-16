@@ -35,6 +35,10 @@ int mp_add_small(mp_int *x, unsigned int a);
 int mp_mul_small(mp_int *x, unsigned int m);
 int mp_div_small(mp_int *result, const mp_int *a, unsigned int divisor, unsigned int *remainder);
 
+int mp_inc(mp_int *x);
+
+int mp_fits_uint(const mp_int *x);
+
 /* absolute ops used internally / optionally public */
 int mp_cmp_abs(const mp_int *a, const mp_int *b);
 int mp_add_abs(mp_int *result, const mp_int *a, const mp_int *b);
