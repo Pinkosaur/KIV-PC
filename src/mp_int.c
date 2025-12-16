@@ -471,7 +471,10 @@ int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
     if (!result || !a || !b) return FAILURE;
 
     /* divisor zero */
-    if (b->length == 0 || b->sign == 0) return FAILURE;
+    if (b->length == 0 || b->sign == 0) {
+        printf("Division by zero!");
+        return FAILURE;
+    }
 
     /* dividend zero -> quotient zero */
     if (a->length == 0 || a->sign == 0) {
