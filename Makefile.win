@@ -1,0 +1,46 @@
+# Makefile.win -- for GNU make on Windows (MinGW/MSYS or Git-Bash)
+CC ?= gcc
+CFLAGS ?= -Wall -pedantic -ansi -Wextra -O2 -Iinclude -pg
+CFLAGS += -MMD -MP
+LDFLAGS ?=
+BIN ?= calc.exe
+
+SRCDIR := src
+BUILDDIR := build
+SRCS := mp_int.c mp_print.c parser.c exp.c fact.c main.c error.c
+OBJS := $(patsubst %.c,$(BUILDDIR)/%.o,$(SRCS))
+DEPS := $(OBJS:.o=.d)
+
+.PHONY: all clean dirs
+
+all: dirs $(BIN)
+
+# Create build dir in a way that works in both sh and cmd shells:
+dirs:
+	@if [ -d "$(BUILDDIR)" ]; then :; else \
+		if mkdir -p $(BUILDDIR) 2>/dev/null; then :; else \
+			if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"; fi; \
+		fi \
+	fi
+
+$(OBJS): | $(BUILDDIR)
+
+$(BUILDDIR):
+	@if [ -d "$(BUILDDIR)" ]; then :; else \
+		if mkdir -p $(BUILDDIR) 2>/dev/null; then :; else \
+			if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"; fi; \
+		fi \
+	fi
+
+$(BUILDDIR)/%.o: $(SRCDIR)/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BIN): $(OBJS)
+	$(CC) $(LDFLAGS) $(OBJS) -o $(BIN)
+
+clean:
+	@echo removing binaries...
+	@if [ -d "$(BUILDDIR)" ]; then rm -rf $(BUILDDIR); fi
+	@if exist $(BIN) del /Q $(BIN)
+
+-include $(DEPS)
