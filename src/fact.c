@@ -9,8 +9,6 @@
  * This avoids forcing 'a' into a native integer type; all comparisons and increments
  * are done using mp_int operations. The function uses a fast path (mp_mul_small)
  * when the multiplier i fits in a single limb.
- *
- * ANSI C90 compatible, 32-bit platforms supported.
  */
 
 #include <stdio.h>
@@ -61,7 +59,6 @@ static int mp_set_uint(mp_int *dst, unsigned int v)
  */
 int mp_fact(mp_int *r, const mp_int *a)
 {
-    /* ANSI C90: declare at top */
     mp_int i;
     mp_int tmp;
     mp_int acc;

@@ -23,9 +23,7 @@ static int mp_abs_copy(mp_int *dst, const mp_int *x)
     return SUCCESS;
 }
 
-/* Local helper: build pow2 = 2^k (k bits).
- * This is implemented by repeated multiply-by-2. It is simple and ANSI C90-safe.
- */
+/* Local helper: build pow2 = 2^k (k bits). */
 static int mp_make_pow2(mp_int *pow2, size_t k)
 {
     if (!pow2) return FAILURE;
