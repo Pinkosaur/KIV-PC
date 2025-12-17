@@ -1,11 +1,31 @@
+/*
+ * exp.c -- integer exponentiation for mp_int
+ *
+ * Implements binary exponentiation and handles negative exponents with
+ * integer-division semantics (i.e., 1/(a^k) truncated to integer).
+ *
+ * ANSI C90 compatible, 32-bit safe.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include "mp_int.h"
 #include "exp.h"
 
+/*
+ * mp_pow: see header for full documentation.
+ *
+ * Implementation notes:
+ *  - Works on temporaries to avoid altering the inputs.
+ *  - Uses mp_div_small(..., 2, &rem) to obtain exponent parity each iteration.
+ *  - For negative exponent, only integer reciprocal results are returned:
+ *      if |a^|b|| == 1 => result is ±1, else 0
+ *
+ * Returns SUCCESS or FAILURE.
+ */
 int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
 {
-    /* declarations first (ANSI C90) */
+    /* ANSI C90: declare variables at top */
     mp_int base;
     mp_int exp;
     mp_int res;
@@ -19,7 +39,7 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
 
     if (!r || !a || !b) return FAILURE;
 
-    /* Special-cases: base == 0 */
+    /* Special cases for base == 0 */
     if (a->sign == 0) {
         if (b->sign == 0) {
             /* define 0^0 = 1 */
@@ -31,9 +51,10 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
             r->sign = 1;
             return SUCCESS;
         }
-        /* if exponent negative -> 1/0 -> error */
+        /* 0^negative -> division by zero */
         if (b->sign < 0) {
-            fprintf(stderr, "error: division by zero (0 raised to negative exponent)\n");
+            calc_error_set();
+            printf("Division by zero!\n");
             return FAILURE;
         }
         /* 0^positive = 0 */
@@ -63,10 +84,11 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
     mp_init(&tmpb);
     mp_init(&q);
 
-    mp_copy(&base, a);
-    mp_copy(&exp, b);
+    /* make local copies; if mp_copy fails we'll go to cleanup */
+    if (mp_copy(&base, a) != SUCCESS) goto cleanup;
+    if (mp_copy(&exp, b) != SUCCESS) goto cleanup;
 
-    /* remember if exponent was negative and work with |exp| for the loop */
+    /* remember if exponent was negative, work with |exp| inside loop */
     if (exp.sign < 0) {
         negative_exp = 1;
         exp.sign = +1;
@@ -78,8 +100,9 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
     res.length = 1;
     res.sign = 1;
 
-    /* main loop: binary exponentiation while exp > 0 */
+    /* Binary exponentiation loop: while exp > 0 */
     while (exp.sign != 0) {
+        /* q = exp / 2, rem = exp % 2 */
         rem = 0;
         mp_free(&q);
         mp_init(&q);
@@ -87,7 +110,7 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
             status = FAILURE; goto cleanup;
         }
 
-        /* if exponent bit is 1: res = res * base */
+        /* if current exponent bit is 1: res = res * base */
         if (rem == 1U) {
             mp_free(&tmp);
             mp_init(&tmp);
@@ -107,13 +130,13 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
         if (mp_copy(&base, &tmp) != SUCCESS) { status = FAILURE; goto cleanup; }
         mp_free(&tmp);
 
-        /* exp = q (the quotient) */
+        /* exp = q (floor division) */
         mp_free(&exp);
         mp_init(&exp);
         if (mp_copy(&exp, &q) != SUCCESS) { status = FAILURE; goto cleanup; }
     }
 
-    /* Determine parity of original exponent (needed only for sign when base negative) */
+    /* Determine parity of original exponent (for sign when base negative) */
     is_exp_odd = 0;
     mp_free(&tmpb);
     mp_init(&tmpb);
@@ -124,24 +147,24 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
     if (mp_div_small(&q, &tmpb, 2U, &rem) != SUCCESS) { status = FAILURE; goto cleanup; }
     if (rem == 1U) is_exp_odd = 1U;
 
-    /* mp_mul already set the sign of 'res' correctly in multiplications.
-       However in some codepaths it's safe to ensure sign for odd negative-base exponents: */
+    /* If base negative and exponent odd, ensure negative sign on result */
     if (a->sign < 0 && is_exp_odd) {
-        /* ensure result sign is negative */
         res.sign = -1;
     }
 
-    /* Handle negative exponent by integer division: r = 1 / res (integer division) */
+    /* If exponent was negative, return integer reciprocal semantics:
+       - if |res| == 1 => result is ±1
+       - else => integer division gives 0
+    */
     if (negative_exp) {
-        /* division by zero check */
         if (res.length == 0 || res.sign == 0) {
             fprintf(stderr, "error: division by zero in negative exponent\n");
             status = FAILURE;
             goto cleanup;
         }
 
-        /* if |res| == 1, 1 / res is +/-1; else integer division gives 0 */
         if (res.length == 1 && res.digits[0] == 1U) {
+            /* result is ±1 */
             mp_free(r);
             mp_init(r);
             if (mp_reserve(r, 1) != SUCCESS) { status = FAILURE; goto cleanup; }
@@ -151,7 +174,7 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
             status = SUCCESS;
             goto cleanup;
         } else {
-            /* 1 / |res| where |res| > 1 -> integer result 0 (C truncates toward zero) */
+            /* integer reciprocal truncates to zero */
             mp_free(r);
             mp_init(r);
             r->sign = 0;
@@ -161,7 +184,7 @@ int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
         }
     }
 
-    /* positive exponent: move res into r */
+    /* positive exponent: copy res to r */
     mp_free(r);
     mp_init(r);
     if (mp_copy(r, &res) != SUCCESS) { status = FAILURE; goto cleanup; }

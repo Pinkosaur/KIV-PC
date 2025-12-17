@@ -1,3 +1,23 @@
+/*
+ * parser.c -- tokenizer, shunting-yard, postfix evaluator, file processing
+ *
+ * Important behaviors explained:
+ *  - Tokenizer: recognizes operands (optionally signed literals with 0x/0b prefixes),
+ *    single-char operators (+ - * / % ^ !) and parentheses.
+ *  - Unary rules:
+ *      * A leading '+'/'-' that appears at start or immediately after '('/another operator
+ *        is generally treated as a sign for a following numeric literal.
+ *      * Exception: when a signed literal would be immediately followed by a postfix '!' (factorial),
+ *        the tokenizer will *not* attach the sign to the literal; it rewrites e.g. "-49!" as:
+ *           "0" "-" "49" "!"
+ *        This ensures factorial has higher precedence than unary minus (so -49! == -(49!)).
+ *      * For "-(...)" forms the tokenizer rewrites to "0" "-" "(" ... to allow parsing "-(...)".
+ *
+ *  - Shunting-yard: supports postfix unary '!' with highest precedence (per op_table).
+ *  - Postfix evaluator: uses an mp_int stack (fixed depth 128). That limit is conservative but
+ *    should be adjusted if you expect extremely deep expression trees.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,24 +28,31 @@
 #include "exp.h"
 #include "fact.h"
 
-
+/* Helper: returns true if the character is one of the single-char operators we support. */
 static int is_operator(char c) {
     return strchr("+-*/%^!", c) != NULL;
 }
 
-/* Trim in-place leading and trailing whitespace */
+/* Trim in-place leading and trailing whitespace.
+   Implemented carefully to use only C90 features and avoid temporary allocations. */
 static void trim_inplace(char *s) {
     char *p = s;
     size_t len;
     while (*p && isspace((unsigned char)*p)) p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
+    if (p != s) memmove(s, p, strlen(p) + 1); /* shift left if needed */
     len = strlen(s);
     while (len > 0 && isspace((unsigned char)s[len - 1])) s[--len] = '\0';
 }
 
+/* Operator metadata table:
+   - op: character
+   - precedence: higher = evaluated before
+   - right_assoc: 1 if operator is right-associative (e.g., exponentiation '^')
+   - unary: 1 if operator is unary (we use this primarily for postfix factorial '!')
+*/
 static OpInfo op_table[] = {
-    {'!', 5, 1, 1},  /* factorial, unary postfix */
-    {'^', 4, 1, 0},  /* exponentiation */
+    {'!', 5, 1, 1},  /* factorial, unary postfix (highest precedence) */
+    {'^', 4, 1, 0},  /* exponentiation (right associative) */
     {'*', 3, 0, 0},
     {'/', 3, 0, 0},
     {'%', 3, 0, 0},
@@ -35,20 +62,19 @@ static OpInfo op_table[] = {
     {0, 0, 0, 0}
 };
 
+/* Accessor helpers for op_table */
 static int get_precedence(char op) {
     int i;
     for (i = 0; op_table[i].op; ++i)
         if (op_table[i].op == op) return op_table[i].precedence;
     return 0;
 }
-
 static int is_right_assoc(char op) {
     int i;
     for (i = 0; op_table[i].op; ++i)
         if (op_table[i].op == op) return op_table[i].right_assoc;
     return 0;
 }
-
 static int is_unary(char op) {
     int i;
     for (i = 0; op_table[i].op; ++i)
@@ -59,12 +85,13 @@ static int is_unary(char op) {
 /*
  Tokenizer rules:
   - Produces tokens that are either:
-      * an operator single-char: "+", "-", "*", "/", "%", "^", "!"
+      * a single-character operator: "+", "-", "*", "/", "%", "^", "!"
       * "(" or ")"
-      * a full operand string (may include a leading + or - sign, and hex/bin prefixes)
-  - A leading + / - is considered part of a number when it appears:
-      * at the very start of the expression, or
-      * immediately after '(' or another operator token.
+      * an operand string (may include a leading + or - sign and binary/hex prefixes)
+  - Leading + / - is considered part of a literal when it appears at expression start
+    or immediately after '(' or another operator — *except* when the literal is followed
+    immediately (possibly after spaces) by a postfix '!' token. In that case the sign
+    must be treated as a separate binary operator so that factorial binds more tightly.
 */
 void tokenize(const char *expr, TokenList *out) {
     const char *p;
@@ -73,7 +100,7 @@ void tokenize(const char *expr, TokenList *out) {
     int prev_was_operand; /* 0 = start/after-operator/'(', 1 = after-operand or ')' */
 
     out->count = 0;
-    prev_was_operand = 0; /* at start, treat +/ - as sign if they appear */
+    prev_was_operand = 0; /* treat leading +/ - as sign if they appear */
 
     p = expr;
     while (*p) {
@@ -81,53 +108,50 @@ void tokenize(const char *expr, TokenList *out) {
         while (isspace((unsigned char)*p)) p++;
         if (*p == '\0') break;
 
-        /* safety: don't overflow tokens */
+        /* safety: do not exceed token storage */
         if (out->count >= 256) break;
 
-        /* If we see + or - we must decide: operator or sign of number */
+        /* Handle leading + / - that may be a sign or operator.
+           Several cases handled:
+             - "-("  => rewrite as "0" "-" "(" so unary minus before parenthesis works.
+             - "-number" where 'number' not followed immediately by '!' => treat as signed literal.
+             - "-number !" => treat sign as separate binary operator: "0" "-" "number" "!"
+        */
         if ((*p == '+' || *p == '-') && !prev_was_operand) {
-            /* decide whether this is a sign attached to a number, or a unary operator before '(',
-               or an operator token. We treat:
-                 - sign + number/0x/0b -> gather signed-number token
-                 - sign followed (possibly after spaces) by '(' -> rewrite as "0" and the binary operator
-                 - otherwise treat as operator
-            */
             const char *q = p + 1;
             /* skip spaces when checking for parentheses case */
             while (isspace((unsigned char)*q)) q++;
             if (*q == '(') {
-                /* rewrite "-("  -> tokens "0" "-" "("   (and similarly for "+(") */
-                /* emit "0" token */
+                /* rewrite "-(" as tokens: "0" "-" "(" */
                 strncpy(out->tokens[out->count], "0", 64);
                 out->tokens[out->count][63] = '\0';
                 out->count++;
-                /* emit operator token (+ or -) */
+
                 out->tokens[out->count][0] = *p;
                 out->tokens[out->count][1] = '\0';
                 out->count++;
-                /* operator leaves prev_was_operand = 0 (already) */
-                p++; /* consume the sign character, next loop will handle the '(' */
+
+                /* consume sign; '(' will be handled in next loop iteration */
+                p++;
                 continue;
             }
 
-            /* If next char is not whitespace and looks like start of a number, gather a signed-number token */
-            /* If sign before number: check whether this number is immediately followed by '!' */
+            /* If next char looks like a number token, check whether the signed literal
+               would be immediately followed by a postfix '!' — if so, do not absorb sign
+               into the literal (we want factorial to bind before unary minus). */
             q = p + 1;
             if (*q != '\0' && !isspace((unsigned char)*q)) {
                 const char *r = q;
-
                 /* scan number body */
                 while (*r && !isspace((unsigned char)*r) &&
-                    !is_operator(*r) && *r != '(' && *r != ')') {
-                    r++;
-                }
+                    !is_operator(*r) && *r != '(' && *r != ')') { r++; }
 
-                /* If next non-space char is '!', DO NOT absorb sign into number */
+                /* scan past spaces to see if '!' follows */
                 {
                     const char *s = r;
                     while (isspace((unsigned char)*s)) s++;
                     if (*s == '!') {
-                        /* rewrite "-49!" as "0 - 49 !" */
+                        /* rewrite "-49!" as "0" "-" "49" "!" */
                         strncpy(out->tokens[out->count], "0", 64);
                         out->tokens[out->count][63] = '\0';
                         out->count++;
@@ -136,14 +160,14 @@ void tokenize(const char *expr, TokenList *out) {
                         out->tokens[out->count][1] = '\0';
                         out->count++;
 
-                        p++; /* consume sign, number will be read normally */
+                        p++; /* consume only the sign; number will be tokenized in next pass */
                         continue;
                     }
                 }
 
-                /* Otherwise: signed literal is allowed */
+                /* Otherwise collect a signed literal token (e.g. "-123", "+0x1f") */
                 i = 0;
-                if (i < 63) buf[i++] = *p;
+                if (i < 63) buf[i++] = *p; /* leading sign */
                 p++;
                 while (*p && !isspace((unsigned char)*p) &&
                     !is_operator(*p) && *p != '(' && *p != ')') {
@@ -151,17 +175,16 @@ void tokenize(const char *expr, TokenList *out) {
                     p++;
                 }
                 buf[i] = '\0';
-
                 strncpy(out->tokens[out->count], buf, 64);
                 out->tokens[out->count][63] = '\0';
                 out->count++;
                 prev_was_operand = 1;
                 continue;
             }
-            /* else fall through to treat + / - as a plain operator token */
+            /* otherwise fallthrough to emit sign as operator token */
         }
 
-        /* If it's a single-char operator or parentheses, emit operator token */
+        /* Single-char operator or parentheses */
         if (is_operator(*p) || *p == '(' || *p == ')') {
             out->tokens[out->count][0] = *p;
             out->tokens[out->count][1] = '\0';
@@ -174,7 +197,7 @@ void tokenize(const char *expr, TokenList *out) {
             continue;
         }
 
-        /* Otherwise it's the start of a plain operand token (no leading sign) */
+        /* Otherwise parse a plain operand token (no leading sign) */
         i = 0;
         while (*p && !isspace((unsigned char)*p) && !is_operator(*p) && *p != '(' && *p != ')') {
             if (i < 63) buf[i++] = *p;
@@ -188,8 +211,14 @@ void tokenize(const char *expr, TokenList *out) {
     }
 }
 
-
-/* ---------- Shunting Yard: infix -> postfix ---------- */
+/*
+ * to_postfix -- convert infix token list to postfix using the shunting-yard algorithm
+ *
+ * Notes:
+ *  - Supports binary operators and a postfix unary operator '!' (factorial).
+ *  - Uses operator precedence and associativity from op_table.
+ *  - The stack capacity is 256 characters (sufficient for single-char operators and parentheses).
+ */
 void to_postfix(TokenList *infix, TokenList *postfix) {
     char stack[256];
     int i;
@@ -198,11 +227,13 @@ void to_postfix(TokenList *infix, TokenList *postfix) {
 
     for (i = 0; i < infix->count; ++i) {
         char *tok = infix->tokens[i];
+
         /* operator token (single char) */
         if (tok[0] != '\0' && tok[1] == '\0' && is_operator(tok[0])) {
             char op = tok[0];
             if (is_unary(op)) {
-                /* postfix unary operators: they behave like operators with precedence */
+                /* postfix unary operators behave like operators with precedence:
+                   pop while top has >= precedence, then push unary operator. */
                 while (sp > 0 && get_precedence(stack[sp-1]) >= get_precedence(op)) {
                     postfix->tokens[postfix->count][0] = stack[--sp];
                     postfix->tokens[postfix->count][1] = '\0';
@@ -210,7 +241,7 @@ void to_postfix(TokenList *infix, TokenList *postfix) {
                 }
                 stack[sp++] = op;
             } else {
-                /* binary operator: pop according to precedence/associativity */
+                /* binary operator: pop according to precedence and associativity */
                 while (sp > 0) {
                     char top = stack[sp-1];
                     if (is_operator(top) &&
@@ -226,6 +257,7 @@ void to_postfix(TokenList *infix, TokenList *postfix) {
         } else if (tok[0] == '(' && tok[1] == '\0') {
             stack[sp++] = '(';
         } else if (tok[0] == ')' && tok[1] == '\0') {
+            /* pop until '(' */
             while (sp > 0 && stack[sp-1] != '(') {
                 postfix->tokens[postfix->count][0] = stack[--sp];
                 postfix->tokens[postfix->count][1] = '\0';
@@ -233,12 +265,14 @@ void to_postfix(TokenList *infix, TokenList *postfix) {
             }
             if (sp > 0 && stack[sp-1] == '(') sp--; /* pop '(' */
         } else {
-            /* operand (possibly multi-char) */
+            /* operand (possibly multi-char) -> emit to postfix */
             strncpy(postfix->tokens[postfix->count], tok, 64);
             postfix->tokens[postfix->count][63] = '\0';
             postfix->count++;
         }
     }
+
+    /* flush operator stack */
     while (sp > 0) {
         postfix->tokens[postfix->count][0] = stack[--sp];
         postfix->tokens[postfix->count][1] = '\0';
@@ -246,7 +280,17 @@ void to_postfix(TokenList *infix, TokenList *postfix) {
     }
 }
 
-/* ---------- Postfix evaluator ---------- */
+/*
+ * eval_postfix -- evaluate a postfix token list and produce an mp_int result.
+ *
+ * Stack usage:
+ *   - Uses mp_int stack[128]. Each mp_int is small (contains pointers) but the
+ *     stack depth limit is 128 items; enlarge if you expect deep nesting.
+ *
+ * Operator semantics:
+ *   - Binary: + - * / % ^  (power uses mp_pow)
+ *   - Postfix unary: ! (factorial) uses mp_fact
+ */
 int eval_postfix(TokenList *postfix, mp_int *result) {
     mp_int stack[128];
     int i;
@@ -254,9 +298,11 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
 
     for (i = 0; i < postfix->count; ++i) {
         char *tok = postfix->tokens[i];
+
         /* operator token (single char) */
         if (tok[0] != '\0' && tok[1] == '\0' && is_operator(tok[0])) {
             char op = tok[0];
+
             if (is_unary(op)) {
                 /* postfix unary: pop one operand, apply, push result */
                 if (sp < 1) return FAILURE;
@@ -264,27 +310,31 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
                     mp_int a;
                     mp_int out;
                     mp_init(&a); mp_init(&out);
-                    /* pop */
+
+                    /* pop a from stack */
                     mp_copy(&a, &stack[--sp]);
                     mp_free(&stack[sp]);
-                    /* evaluate */
+
+                    /* apply unary operator */
                     if (op == '!') {
                         if (mp_fact(&out, &a) != SUCCESS) {
-                            mp_free(&a); mp_free(&out); return FAILURE;
+                            mp_free(&a); mp_free(&out);
+                            return FAILURE;
                         }
                     } else {
-                        /* unknown unary - should not happen */
-                        mp_free(&a); mp_free(&out); return FAILURE;
+                        mp_free(&a); mp_free(&out);
+                        return FAILURE; /* unknown unary */
                     }
                     mp_free(&a);
-                    /* push out */
+
+                    /* push result */
                     mp_init(&stack[sp]);
                     mp_copy(&stack[sp], &out);
                     mp_free(&out);
                     sp++;
                 }
             } else {
-                /* binary operator */
+                /* binary operator: pop two operands (b then a), compute a op b */
                 if (sp < 2) return FAILURE;
                 {
                     mp_int a;
@@ -298,7 +348,7 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
                     mp_copy(&a, &stack[--sp]);
                     mp_free(&stack[sp]);
 
-                    /* compute out = a op b */
+                    /* compute */
                     if (op == '+') {
                         if (mp_add(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
                     } else if (op == '-') {
@@ -312,7 +362,8 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
                     } else if (op == '^') {
                         if (mp_pow(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
                     } else {
-                        mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE;
+                        mp_free(&a); mp_free(&b); mp_free(&out);
+                        return FAILURE;
                     }
 
                     mp_free(&a);
@@ -326,22 +377,27 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
                 }
             }
         } else {
-            /* operand: parse and push */
+            /* operand: parse and push onto stack */
             if (sp >= 128) return FAILURE;
             mp_init(&stack[sp]);
             if (parse_operand_to_mp(&stack[sp], tok) != SUCCESS) {
                 /* cleanup partially built stack */
-                int j;
-                for (j = 0; j <= sp; ++j) mp_free(&stack[j]);
+                {
+                    int j;
+                    for (j = 0; j <= sp; ++j) mp_free(&stack[j]);
+                }
                 return FAILURE;
             }
             sp++;
         }
     }
 
+    /* final result must be single value on stack */
     if (sp != 1) {
-        int j;
-        for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+        {
+            int j;
+            for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+        }
         return FAILURE;
     }
 
@@ -352,12 +408,9 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
 
 /*
   split_expr:
-    - input: a nul-terminated string (may contain leading/trailing spaces)
-    - outputs: lhs (buffer), rhs (buffer), op (single char)
-    - returns 1 if an operator was found and split succeeded, 0 if no binary operator detected
-  Notes:
-    - it accepts forms like "123+456", "  -2   *  0x10", "0b101 - -0b1"
-    - does NOT implement parenthesis or operator precedence
+    - utility that splits a simple two-operand expression into lhs, op, rhs.
+    - This helper does NOT support parentheses or operator precedence;
+      it exists for simpler one-line parsing use-cases.
 */
 int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs, size_t rhs_cap) {
     char buf[1024];
@@ -366,7 +419,8 @@ int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs
     size_t right_len;
 
     if (!input || !lhs || !rhs || !op) return 0;
-    /* copy and trim */
+
+    /* copy and trim input into local buffer */
     strncpy(buf, input, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
     trim_inplace(buf);
@@ -381,10 +435,9 @@ int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs
             char ch = buf[i];
             if (ch == '+' || ch == '-' || ch == '*' || ch == '/') {
                 if (i == 0) {
-                    /* This is sign of the first operand -> skip */
+                    /* leading sign, skip */
                     continue;
                 }
-                /* We accept this as operator */
                 found = 1;
                 break;
             }
@@ -392,34 +445,31 @@ int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs
         if (!found) return 0;
     }
 
-    /* split */
+    /* split into left, op, right; trim both sides */
     left_len = i;
     right_len = (n > i + 1) ? n - (i + 1) : 0;
-    /* copy left */
+
     if (left_len >= lhs_cap) left_len = lhs_cap - 1;
     strncpy(lhs, buf, left_len);
     lhs[left_len] = '\0';
     trim_inplace(lhs);
-    /* copy operator */
+
     *op = buf[i];
-    /* copy right */
+
     if (right_len >= rhs_cap) right_len = rhs_cap - 1;
     strncpy(rhs, buf + i + 1, right_len);
     rhs[right_len] = '\0';
     trim_inplace(rhs);
 
-    /* If rhs is empty -> not a valid binary expression */
     if (rhs[0] == '\0') return 0;
-    /* lhs must not be empty either */
     if (lhs[0] == '\0') return 0;
 
     return 1;
 }
 
-/* parse_operand_to_mp: parses a single operand string into dst (auto detects base) */
-/* parse_operand_to_mp: parses a single operand string into dst (auto detects base)
-   Accepts operands that may start with an optional + or - sign, followed by
-   decimal, 0b... binary, or 0x... hex. */
+/* parse_operand_to_mp: parse one operand string into mp_int (auto-detect base)
+   Accepts an optional leading + / - followed by decimal, 0b... binary, or 0x... hex.
+*/
 int parse_operand_to_mp(mp_int *dst, const char *s) {
     char buf[1024];
     const char *q;
@@ -427,17 +477,16 @@ int parse_operand_to_mp(mp_int *dst, const char *s) {
 
     if (!dst || !s) return FAILURE;
 
-    /* trim into local buffer */
+    /* copy and trim local */
     strncpy(buf, s, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
     trim_inplace(buf);
     if (buf[0] == '\0') return FAILURE;
 
-    /* Look past optional leading sign to detect 0x/0b prefixes */
+    /* skip optional sign when detecting prefix */
     q = buf;
     if (*q == '+' || *q == '-') q++;
 
-    /* Now test the prefix at q */
     if (q[0] == '0' && (q[1] == 'x' || q[1] == 'X')) {
         status = mp_from_str_hex(dst, buf);
         return status;
@@ -445,16 +494,19 @@ int parse_operand_to_mp(mp_int *dst, const char *s) {
         status = mp_from_str_bin(dst, buf);
         return status;
     } else {
-        /* default decimal (handles leading + / -) */
         status = mp_from_str_dec(dst, buf);
         return status;
     }
 }
 
-
-/* ------------------------------------------------- File processing ----------------------------------------------- */
-
-/* parses the input file name, checks validity and processes each line as a decimal number */
+/* ------------------------------------------------- File processing -----------------------------------------------
+   process_file:
+     - Reads the file line by line
+     - Echoes the line (prints "> <line>")
+     - Supports file-local commands (bin/hex/dec/out)
+     - Otherwise treats the line as an expression and evaluates it using the same
+       tokenize -> to_postfix -> eval_postfix pipeline as the REPL.
+*/
 int process_file(char str[]) {
     FILE *f;
     char line[1024];
@@ -466,6 +518,8 @@ int process_file(char str[]) {
     if (!str) return FAILURE;
     f = fopen(str, "r");
     if (!f) {
+        /* note: original code exits here; returning FAILURE is generally
+           better for embedding/automated use. Currently mirrors original behavior. */
         printf("Invalid input file!\n");
         exit(EXIT_FAILURE);
     }
@@ -477,16 +531,16 @@ int process_file(char str[]) {
         /* Trim newline / CR */
         while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r')) { line[--L] = '\0'; }
 
-        /* Trim leading/trailing whitespace in place (uses existing helper) */
+        /* Trim leading/trailing whitespace */
         trim_inplace(line);
 
         /* Skip empty lines */
         if (line[0] == '\0') continue;
 
-        /* Echo input line */
+        /* Echo input line before evaluating (requested behavior) */
         printf("> %s\n", line);
 
-        /* File-local commands (mirror interactive REPL commands) */
+        /* Mirror REPL file-local commands */
         if (strcmp(line, "bin") == 0) {
             print_format = BIN;
             printf("bin\n");
@@ -512,257 +566,24 @@ int process_file(char str[]) {
             continue;
         }
 
-        /* Otherwise treat the line as an expression and evaluate it */
+        /* Evaluate expression line */
         tokenize(line, &infix);
         to_postfix(&infix, &postfix);
 
-        /* Ensure result is initialized for mp_copy inside eval_postfix */
         mp_free(&result);
         mp_init(&result);
 
         if (eval_postfix(&postfix, &result) == SUCCESS) {
-            /* print using current print_format */
             mp_print[print_format](&result);
             putchar('\n');
-        } else {
-            printf("parse or eval error\n");
         }
 
-        /* clean result and continue */
+        /* reset result and continue */
         mp_free(&result);
         mp_init(&result);
     }
 
     mp_free(&result);
     fclose(f);
-    return SUCCESS;
-}
-
-
-/* ---------- Decimal ---------- */
-int mp_from_str_dec(mp_int *x, const char *str)
-{
-    const char *p;
-    int sign;
-    unsigned int d;
-
-    if (!x || !str) return FAILURE;
-    mp_free(x);
-    mp_init(x);
-
-    p = str;
-    while (isspace((unsigned char)*p)) p++;
-
-    sign = +1;
-    if (*p == '-') { sign = -1; p++; }
-    else if (*p == '+') { p++; }
-
-    while (*p == '0') p++;
-
-    if (!isdigit((unsigned char)*p)) {
-        x->sign = 0;
-        x->length = 0;
-        return SUCCESS;
-    }
-
-    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
-    x->digits[0] = 0;
-    x->length = 1;
-    x->sign = +1;
-
-    for (; *p; ++p) {
-        if (!isdigit((unsigned char)*p)) break;
-        d = (unsigned int)(*p - '0');
-        if (mp_mul_small(x, 10U) != SUCCESS) return FAILURE;
-        if (mp_add_small(x, d) != SUCCESS) return FAILURE;
-    }
-
-    if (x->length == 1 && x->digits[0] == 0)
-        x->sign = 0;
-    else
-        x->sign = sign;
-    return SUCCESS;
-}
-
-/* ---------- Binary (with implicit sign bit handling) ---------- */
-int mp_from_str_bin(mp_int *x, const char *str) {
-    /* ANSI C90 declarations at top */
-    size_t i;
-    const char *p;
-    const char *digits;
-    size_t digits_len;
-    unsigned int bit;
-    int explicit_sign = +1;
-
-    if (!x || !str) return FAILURE;
-    mp_free(x);
-    mp_init(x);
-
-    /* skip leading whitespace */
-    p = str;
-    while (isspace((unsigned char)*p)) p++;
-
-    /* optional explicit sign */
-    if (*p == '-') { explicit_sign = -1; p++; }
-    else if (*p == '+') { p++; }
-
-    /* optional 0b/0B prefix */
-    if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) p += 2;
-
-    /* collect contiguous binary digits */
-    digits = p;
-    digits_len = 0;
-    while (p[digits_len] == '0' || p[digits_len] == '1') digits_len++;
-
-    if (digits_len == 0) {
-        /* no binary digits -> treat as zero/invalid */
-        x->sign = 0;
-        x->length = 0;
-        return SUCCESS;
-    }
-
-    /* initialize x = 0 */
-    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
-    x->digits[0] = 0;
-    x->length = 1;
-    x->sign = 1; /* magnitude building */
-
-    /* parse digits left-to-right */
-    for (i = 0; i < digits_len; ++i) {
-        bit = (unsigned int)(digits[i] - '0');
-        if (mp_mul_small(x, 2U) != SUCCESS) return FAILURE;
-        if (mp_add_small(x, bit) != SUCCESS) return FAILURE;
-    }
-
-    /* two's complement detection: if the highest provided bit is 1, interpret as negative value
-       (value = magnitude - 2^digits_len). */
-    if (digits[0] == '1') {
-        mp_int pow2;
-        mp_int tmp;
-
-        mp_init(&pow2);
-        mp_init(&tmp);
-
-        /* pow2 = 2^digits_len */
-        if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-        pow2.digits[0] = 1;
-        pow2.length = 1;
-        pow2.sign = 1;
-        for (i = 0; i < digits_len; ++i) {
-            if (mp_mul_small(&pow2, 2U) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-        }
-
-        /* tmp = x - pow2  (may be negative) */
-        if (mp_sub(&tmp, x, &pow2) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-
-        /* copy tmp back into x */
-        mp_free(x);
-        mp_init(x);
-        if (mp_copy(x, &tmp) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-
-        mp_free(&pow2);
-        mp_free(&tmp);
-    }
-
-    /* apply explicit sign: explicit '-' flips the computed sign (even if two's-complement produced negative) */
-    if (explicit_sign == -1) {
-        x->sign = -x->sign;
-    }
-
-    return SUCCESS;
-}
-
-/* ---------- Hexadecimal (with implicit sign bit handling) ---------- */
-int mp_from_str_hex(mp_int *x, const char *str) {
-    /* ANSI C90 declarations at top */
-    size_t i;
-    const char *p;
-    const char *digits;
-    size_t digits_len;
-    int val;
-    int explicit_sign = +1;
-    int first_nibble;
-
-    if (!x || !str) return FAILURE;
-    mp_free(x);
-    mp_init(x);
-
-    /* skip leading whitespace */
-    p = str;
-    while (isspace((unsigned char)*p)) p++;
-
-    /* optional explicit sign */
-    if (*p == '-') { explicit_sign = -1; p++; }
-    else if (*p == '+') { p++; }
-
-    /* optional 0x/0X prefix */
-    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
-
-    /* collect contiguous hex digits */
-    digits = p;
-    digits_len = 0;
-    while (isxdigit((unsigned char)p[digits_len])) digits_len++;
-
-    if (digits_len == 0) {
-        x->sign = 0;
-        x->length = 0;
-        return SUCCESS;
-    }
-
-    /* initialize x = 0 */
-    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
-    x->digits[0] = 0;
-    x->length = 1;
-    x->sign = 1;
-
-    for (i = 0; i < digits_len; ++i) {
-        char c = digits[i];
-        if (isdigit((unsigned char)c)) val = c - '0';
-        else if (isupper((unsigned char)c)) val = c - 'A' + 10;
-        else val = c - 'a' + 10;
-
-        if (mp_mul_small(x, 16U) != SUCCESS) return FAILURE;
-        if (mp_add_small(x, (unsigned int)val) != SUCCESS) return FAILURE;
-    }
-
-    /* detect sign-bit from first nibble */
-    first_nibble = 0;
-    if (isxdigit((unsigned char)digits[0])) {
-        char c = digits[0];
-        if (isdigit((unsigned char)c)) first_nibble = c - '0';
-        else if (isupper((unsigned char)c)) first_nibble = c - 'A' + 10;
-        else first_nibble = c - 'a' + 10;
-    }
-
-    if (first_nibble & 0x8) {
-        /* interpret as two's complement negative: x = x - 2^(4*digits_len) */
-        mp_int pow2;
-        mp_int tmp;
-        mp_init(&pow2);
-        mp_init(&tmp);
-
-        if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-        pow2.digits[0] = 1;
-        pow2.length = 1;
-        pow2.sign = 1;
-
-        /* pow2 = 2^(4 * digits_len) */
-        for (i = 0; i < (4 * digits_len); ++i) {
-            if (mp_mul_small(&pow2, 2U) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-        }
-
-        if (mp_sub(&tmp, x, &pow2) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-
-        mp_free(x);
-        mp_init(x);
-        if (mp_copy(x, &tmp) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
-
-        mp_free(&pow2);
-        mp_free(&tmp);
-    }
-
-    /* apply explicit sign if present */
-    if (explicit_sign == -1) x->sign = -x->sign;
-
     return SUCCESS;
 }

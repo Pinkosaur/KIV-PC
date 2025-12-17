@@ -1,15 +1,46 @@
+/* mp_int.c  -- ANSI C90 multiple-precision integer implementation
+ *
+ * Uses mp_limb_t and mp_double_t defined in mp_int.h.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "mp_int.h"
+#include "error.h"
 
+/* Threshold (in limbs) for switching between naive multiply and Karatsuba.
+ * This constant may be tuned; it is in limb units. Keep conservative value.
+ */
 #define NAIVE_THRESHOLD 16
 
+/* ------------------------------- Helpers --------------------------------- */
 
-/* ---------------------------------- Memory management helpers -------------------------------------- */
+/*
+ * Normalize an mp_int: remove leading zero limbs and set sign = 0 when value is zero.
+ *
+ * This helper should be called when a function might leave high limbs at zero.
+ */
+static void mp_normalize(mp_int *x)
+{
+    size_t len;
+    if (!x) return;
+    len = x->length;
+    while (len > 0 && x->digits[len - 1] == (mp_limb_t)0) len--;
+    x->length = len;
+    if (x->length == 0) x->sign = 0;
+}
 
-/* Initializes mp_int x to empty state */
-int mp_init(mp_int *x) {
+/* ---------------- Memory management ------------------------------------- */
+
+/*
+ * mp_init: initialize an mp_int to the zero/empty state.
+ *
+ * Postconditions: x->sign == 0, x->length == 0, x->digits == NULL, x->capacity == 0.
+ */
+int mp_init(mp_int *x)
+{
     if (!x) return FAILURE;
     x->sign = 0;
     x->length = 0;
@@ -18,11 +49,14 @@ int mp_init(mp_int *x) {
     return SUCCESS;
 }
 
-/* Frees memory used by the digits and reinitializes the mp_int */
-int mp_free(mp_int *x) {
+/*
+ * mp_free: free underlying digit array and reinitialize structure.
+ * Safe to call with NULL pointer (no-op).
+ */
+int mp_free(mp_int *x)
+{
     if (!x) return SUCCESS;
     free(x->digits);
-    /* reinitialize */
     x->digits = NULL;
     x->length = 0;
     x->capacity = 0;
@@ -30,98 +64,105 @@ int mp_free(mp_int *x) {
     return SUCCESS;
 }
 
-/* Reallocates memory for the new desired size of a mp_int */
-int mp_reserve(mp_int *x, size_t capacity) {
-    unsigned int *new_digits;
+/*
+ * mp_reserve: ensure 'capacity' limbs are allocated. Does nothing if capacity <= current.
+ * Uses realloc semantics; on OOM returns FAILURE and leaves x unchanged.
+ */
+int mp_reserve(mp_int *x, size_t capacity)
+{
+    mp_limb_t *new_digits;
     if (!x) return FAILURE;
-    if (capacity <= x->capacity)
-        return SUCCESS;
-    /* allocate at least 1 to avoid realloc(NULL,0) ambiguity */
-    if (capacity == 0) capacity = 1;
-    new_digits = (unsigned int*) realloc(x->digits, capacity * sizeof(unsigned int));
-    if (!new_digits)
-        return FAILURE; /* out of memory */
+    if (capacity <= x->capacity) return SUCCESS;
+    if (capacity == 0) capacity = 1; /* avoid realloc(NULL,0) ambiguity */
+    new_digits = (mp_limb_t *) realloc(x->digits, capacity * sizeof(mp_limb_t));
+    if (!new_digits) return FAILURE;
     x->digits = new_digits;
     x->capacity = capacity;
     return SUCCESS;
 }
 
-/* Copy mp_int src -> dst (dst must be initialized with mp_init) */
-int mp_copy(mp_int *dst, const mp_int *src) {
+/*
+ * mp_copy: copy src into dst. dst must be initialized (mp_init).
+ * Leaves dst->capacity as-is (grows if needed).
+ */
+int mp_copy(mp_int *dst, const mp_int *src)
+{
     if (!dst || !src) return FAILURE;
     if (src->length == 0) {
+        /* copy zero */
         dst->length = 0;
         dst->sign = 0;
         return SUCCESS;
     }
     if (mp_reserve(dst, src->length) != SUCCESS) return FAILURE;
-    memcpy(dst->digits, src->digits, src->length * sizeof(unsigned int));
+    memcpy(dst->digits, src->digits, src->length * sizeof(mp_limb_t));
     dst->length = src->length;
     dst->sign = src->sign;
     return SUCCESS;
 }
 
+/* ---------------- Small-operand helpers --------------------------------- */
 
-/* ----------------------------------------- Arithmetic logic ------------------------------------------- */
-
-
-/* Adds a mp_int and a regular unsigned int */
+/*
+ * mp_add_small: add small unsigned 'a' to x (in-place): x += a.
+ * Uses accumulator mp_double_t to avoid overflow.
+ */
 int mp_add_small(mp_int *x, unsigned int a)
 {
-    unsigned long carry;
+    mp_double_t carry;
     size_t i;
-    unsigned long sum;
-
     if (!x) return FAILURE;
-    carry = a;
+    carry = (mp_double_t)a;
     i = 0;
     while (carry && i < x->length) {
-        sum = (unsigned long)x->digits[i] + carry;
-        x->digits[i] = (unsigned int)(sum & 0xFFFFFFFFUL);
-        carry = sum >> 32;
+        mp_double_t sum = (mp_double_t)x->digits[i] + carry;
+        x->digits[i] = (mp_limb_t)(sum & (mp_double_t)MP_LIMB_MASK);
+        carry = sum >> MP_LIMB_BITS;
         i++;
     }
     if (carry) {
-        if (mp_reserve(x, x->length + 1) != SUCCESS)
-            return FAILURE;
-        x->digits[x->length++] = (unsigned int)carry;
+        if (mp_reserve(x, x->length + 1) != SUCCESS) return FAILURE;
+        x->digits[x->length++] = (mp_limb_t)carry;
     }
-    if (x->sign == 0 && x->length > 0)
-        x->sign = +1;
+    if (x->sign == 0 && x->length > 0) x->sign = +1;
     return SUCCESS;
 }
 
-/* Multiplies a mp_int by a regular unsigned int */
+/*
+ * mp_mul_small: multiply x in-place by small unsigned m: x *= m.
+ * If x is zero, does nothing. Uses mp_double_t accumulator.
+ */
 int mp_mul_small(mp_int *x, unsigned int m)
 {
-    unsigned long carry;
+    mp_double_t carry;
     size_t i;
-    unsigned long prod;
-
     if (!x) return FAILURE;
-    if (x->sign == 0)
-        return SUCCESS; /* 0 * m = 0 */
+    if (x->sign == 0) return SUCCESS; /* zero remains zero */
 
     carry = 0;
-
     for (i = 0; i < x->length; ++i) {
-        prod = (unsigned long)x->digits[i] * m + carry;
-        x->digits[i] = (unsigned int)(prod & 0xFFFFFFFFUL);
-        carry = prod >> 32;
+        mp_double_t prod = (mp_double_t)x->digits[i] * (mp_double_t)m + carry;
+        x->digits[i] = (mp_limb_t)(prod & (mp_double_t)MP_LIMB_MASK);
+        carry = prod >> MP_LIMB_BITS;
     }
     if (carry) {
-        if (mp_reserve(x, x->length + 1) != SUCCESS)
-            return FAILURE;
-        x->digits[x->length++] = (unsigned int)carry;
+        if (mp_reserve(x, x->length + 1) != SUCCESS) return FAILURE;
+        x->digits[x->length++] = (mp_limb_t)carry;
     }
     return SUCCESS;
 }
 
-/* Divides a mp_int by a regular unsigned int */
-int mp_div_small(mp_int *result, const mp_int *a, unsigned int divisor, unsigned int *remainder) {
-    unsigned long r;
+/*
+ * mp_div_small: result = a / divisor, returns remainder optionally.
+ * Division performed using long-division by treating limbs as base 2^MP_LIMB_BITS.
+ *
+ * Important: result must be initialized or will be initialized here.
+ */
+int mp_div_small(mp_int *result, const mp_int *a, unsigned int divisor, unsigned int *remainder)
+{
+    mp_double_t r;
     size_t i, len;
-    unsigned long cur;
+    mp_double_t cur;
 
     if (!result || !a || divisor == 0) return FAILURE;
     if (a->sign == 0) {
@@ -134,45 +175,59 @@ int mp_div_small(mp_int *result, const mp_int *a, unsigned int divisor, unsigned
     if (mp_reserve(result, a->length) != SUCCESS) return FAILURE;
     r = 0;
     i = a->length;
+    /* Process most-significant limb first (divide algorithm) */
     while (i > 0) {
         i--;
-        cur = (r << 32) | (unsigned long)a->digits[i];
-        result->digits[i] = (unsigned int)(cur / divisor);
-        r = cur % divisor;
+        cur = (r << MP_LIMB_BITS) | (mp_double_t)a->digits[i];
+        result->digits[i] = (mp_limb_t)(cur / (mp_double_t)divisor);
+        r = cur % (mp_double_t)divisor;
     }
 
+    /* trim leading zeros */
     len = a->length;
-    while (len > 0 && result->digits[len - 1] == 0)
-        len--;
+    while (len > 0 && result->digits[len - 1] == (mp_limb_t)0) len--;
     result->length = len;
     result->sign = (len == 0) ? 0 : a->sign;
     if (remainder) *remainder = (unsigned int)r;
     return SUCCESS;
 }
 
+/*
+ * mp_inc: increment x by 1 (wrapper)
+ */
 int mp_inc(mp_int *x)
 {
     if (!x) return FAILURE;
     return mp_add_small(x, 1U);
 }
 
+/*
+ * mp_fits_uint: return non-zero if x is non-negative and fits in a single limb.
+ * This is used to detect when the old "small-operand" fast-path (mp_mul_small)
+ * is applicable; it mirrors prior behaviour using unsigned int.
+ */
 int mp_fits_uint(const mp_int *x)
 {
     if (!x) return 0;
     if (x->sign < 0) return 0;
-    if (x->length == 0) return 1;
+    if (x->length == 0) return 1; /* zero fits */
     if (x->length > 1) return 0;
+    /* single limb: it fits into mp_limb_t; if external code expects unsigned int,
+       caller will read x->digits[0] (older code used unsigned int). */
     return 1;
 }
 
-/* Compare absolute values of two mp_ints */
-/* Returns 1 if a is greater, -1 if b is greater, otherwise 0 */
-int mp_cmp_abs(const mp_int *a, const mp_int *b) {
+/* ---------------- Absolute (unsigned) arithmetic ------------------------- */
+
+/*
+ * mp_cmp_abs: compare absolute values of a and b.
+ * Returns 1 if |a| > |b|, -1 if |a| < |b|, 0 if equal.
+ */
+int mp_cmp_abs(const mp_int *a, const mp_int *b)
+{
     size_t i;
     if (!a || !b) return 0;
-    if (a->length != b->length)
-        return (a->length > b->length) ? 1 : -1;
-
+    if (a->length != b->length) return (a->length > b->length) ? 1 : -1;
     i = a->length;
     while (i > 0) {
         i--;
@@ -182,9 +237,15 @@ int mp_cmp_abs(const mp_int *a, const mp_int *b) {
     return 0;
 }
 
-/* Unsigned addition of mp_int (absolute) */
-int mp_add_abs(mp_int *result, const mp_int *a, const mp_int *b) {
-    unsigned long carry, av, bv, sum;
+/*
+ * mp_add_abs: result = |a| + |b| (unsigned addition).
+ * Writes the absolute result (sign = +1 when non-zero). Caller must supply
+ * distinct objects for result unless they know aliasing is safe.
+ */
+int mp_add_abs(mp_int *result, const mp_int *a, const mp_int *b)
+{
+    mp_double_t carry;
+    mp_double_t av, bv, sum;
     size_t i, n;
 
     if (!result || !a || !b) return FAILURE;
@@ -192,26 +253,30 @@ int mp_add_abs(mp_int *result, const mp_int *a, const mp_int *b) {
     if (mp_reserve(result, n + 1) != SUCCESS) return FAILURE;
 
     carry = 0;
-
     for (i = 0; i < n; ++i) {
-        av = (i < a->length) ? a->digits[i] : 0;
-        bv = (i < b->length) ? b->digits[i] : 0;
+        av = (i < a->length) ? (mp_double_t)a->digits[i] : (mp_double_t)0;
+        bv = (i < b->length) ? (mp_double_t)b->digits[i] : (mp_double_t)0;
         sum = av + bv + carry;
-        result->digits[i] = (unsigned int)(sum & 0xFFFFFFFFu);
-        carry = sum >> 32;
+        result->digits[i] = (mp_limb_t)(sum & (mp_double_t)MP_LIMB_MASK);
+        carry = sum >> MP_LIMB_BITS;
     }
     if (carry) {
-        result->digits[n++] = (unsigned int)carry;
+        result->digits[n++] = (mp_limb_t)carry;
     }
     result->length = n;
     result->sign = (n == 0) ? 0 : +1;
     return SUCCESS;
 }
 
-/* Unsigned subtraction: result = |a| - |b|  (assumes |a| >= |b|) */
-int mp_sub_abs(mp_int *result, const mp_int *a, const mp_int *b) {
+/*
+ * mp_sub_abs: result = |a| - |b| (unsigned subtraction). Requires |a| >= |b|.
+ * Borrow propagation handled via mp_double_t arithmetic.
+ */
+int mp_sub_abs(mp_int *result, const mp_int *a, const mp_int *b)
+{
     size_t n;
-    unsigned long av, bv, diff, borrow;
+    mp_double_t av, bv, diff;
+    mp_double_t borrow;
     size_t i;
 
     if (!result || !a || !b) return FAILURE;
@@ -220,69 +285,83 @@ int mp_sub_abs(mp_int *result, const mp_int *a, const mp_int *b) {
 
     borrow = 0;
     for (i = 0; i < n; ++i) {
-        av = (unsigned long)a->digits[i];
-        bv = (i < b->length) ? (unsigned long)b->digits[i] : 0;
+        av = (mp_double_t)a->digits[i];
+        bv = (i < b->length) ? (mp_double_t)b->digits[i] : (mp_double_t)0;
         diff = av - bv - borrow;
-        if (av < bv + borrow)
-            borrow = 1;
-        else
-            borrow = 0;
-        result->digits[i] = (unsigned int)(diff & 0xFFFFFFFFUL);
+        /* Determine borrow: if av < bv + borrow then borrow = 1 else 0 */
+        if (av < bv + borrow) borrow = 1;
+        else borrow = 0;
+        result->digits[i] = (mp_limb_t)(diff & (mp_double_t)MP_LIMB_MASK);
     }
 
-    /* Remove leading zero limbs */
-    while (n > 0 && result->digits[n - 1] == 0)
-        n--;
+    /* normalize (remove leading zero limbs) */
+    while (n > 0 && result->digits[n - 1] == (mp_limb_t)0) n--;
     result->length = n;
     result->sign = (n == 0) ? 0 : +1;
     return SUCCESS;
 }
 
+/* ---------------- Signed arithmetic ------------------------------------- */
 
-/* Copy-based mp_add (signed) */
-int mp_add(mp_int *result, const mp_int *a, const mp_int *b) {
+/*
+ * mp_add: signed addition. Uses absolute add/sub helpers and sets sign appropriately.
+ * Copies rather than in-place mutate to simplify alias safety.
+ */
+int mp_add(mp_int *result, const mp_int *a, const mp_int *b)
+{
     if (!result || !a || !b) return FAILURE;
     if (a->sign == 0) return mp_copy(result, b);
     if (b->sign == 0) return mp_copy(result, a);
 
     if (a->sign == b->sign) {
-        mp_add_abs(result, a, b);
+        if (mp_add_abs(result, a, b) != SUCCESS) return FAILURE;
         result->sign = a->sign;
     } else {
         int cmp = mp_cmp_abs(a, b);
         if (cmp == 0) {
-            /* a == -b */
+            /* a == -b -> zero */
             result->sign = 0;
             result->length = 0;
         } else if (cmp > 0) {
-            mp_sub_abs(result, a, b);
+            if (mp_sub_abs(result, a, b) != SUCCESS) return FAILURE;
             result->sign = a->sign;
         } else {
-            mp_sub_abs(result, b, a);
+            if (mp_sub_abs(result, b, a) != SUCCESS) return FAILURE;
             result->sign = b->sign;
         }
     }
     return SUCCESS;
 }
 
-/* Subtracts mp_int b from mp_int a */
-int mp_sub(mp_int *result, const mp_int *a, const mp_int *b) {
+/*
+ * mp_sub: result = a - b (signed). Implemented via negating a copy of b then mp_add.
+ */
+int mp_sub(mp_int *result, const mp_int *a, const mp_int *b)
+{
     mp_int tmp;
-
     if (!result || !a || !b) return FAILURE;
     mp_init(&tmp);
     if (mp_copy(&tmp, b) != SUCCESS) { mp_free(&tmp); return FAILURE; }
-    tmp.sign = -tmp.sign;
-    mp_add(result, a, &tmp);
+    tmp.sign = - tmp.sign;
+    if (mp_add(result, a, &tmp) != SUCCESS) { mp_free(&tmp); return FAILURE; }
     mp_free(&tmp);
     return SUCCESS;
 }
 
-/* Naively multiplies two mp_ints, suitable for smaller numbers*/
-int mp_mul_naive(mp_int *result, const mp_int *a, const mp_int *b) {
-    size_t n, m, i, j, len;
-    unsigned long carry, av, idx;
+/* ---------------- Multiplication (naive + Karatsuba) --------------------- */
 
+/*
+ * mp_mul_naive: classical O(n*m) multiplication with correct carry propagation.
+ *
+ * Uses mp_double_t accumulator to hold product + existing result + carry.
+ * Ensures carries that propagate beyond the single next limb are handled
+ * by a loop that adds carry into subsequent limbs (thus avoiding the old bug
+ * of "+= carry" without propagation).
+ */
+int mp_mul_naive(mp_int *result, const mp_int *a, const mp_int *b)
+{
+    size_t n, m, i, j;
+    mp_double_t carry;
     if (!result || !a || !b) return FAILURE;
     if (a->sign == 0 || b->sign == 0) {
         result->sign = 0;
@@ -293,82 +372,101 @@ int mp_mul_naive(mp_int *result, const mp_int *a, const mp_int *b) {
     n = a->length;
     m = b->length;
     if (mp_reserve(result, n + m) != SUCCESS) return FAILURE;
-    memset(result->digits, 0, (n + m) * sizeof(unsigned int));
+    /* initialize full result buffer to zero */
+    memset(result->digits, 0, (n + m) * sizeof(mp_limb_t));
 
     for (i = 0; i < n; ++i) {
         carry = 0;
-        av = a->digits[i];
         for (j = 0; j < m; ++j) {
-            idx = (unsigned long)result->digits[i + j]
-                               + av * (unsigned long)b->digits[j] + carry;
-            result->digits[i + j] = (unsigned int)(idx & 0xFFFFFFFFUL);
-            carry = idx >> 32;
+            mp_double_t acc = (mp_double_t)result->digits[i + j]
+                              + (mp_double_t)a->digits[i] * (mp_double_t)b->digits[j]
+                              + carry;
+            result->digits[i + j] = (mp_limb_t)(acc & (mp_double_t)MP_LIMB_MASK);
+            carry = acc >> MP_LIMB_BITS;
         }
-        if (carry)
-            result->digits[i + m] += (unsigned int)carry;
+        /* propagate carry into higher limbs (may cascade) */
+        if (carry) {
+            size_t pos = i + m;
+            while (carry) {
+                mp_double_t sum = (mp_double_t)((pos < result->capacity) ? result->digits[pos] : 0)
+                                  + carry;
+                /* ensure capacity */
+                if (pos >= result->capacity) {
+                    if (mp_reserve(result, pos + 1) != SUCCESS) return FAILURE;
+                    /* newly allocated elements are uninitialized; zero the area we've used */
+                }
+                result->digits[pos] = (mp_limb_t)(sum & (mp_double_t)MP_LIMB_MASK);
+                carry = sum >> MP_LIMB_BITS;
+                pos++;
+            }
+        }
     }
 
-    len = n + m;
-    while (len > 0 && result->digits[len - 1] == 0)
-        len--;
-    result->length = len;
-    result->sign = a->sign * b->sign;
+    /* determine final length and sign */
+    {
+        size_t len = n + m;
+        while (len > 0 && result->digits[len - 1] == (mp_limb_t)0) len--;
+        result->length = len;
+        result->sign = (len == 0) ? 0 : a->sign * b->sign;
+    }
     return SUCCESS;
 }
 
-/* Logical left shift by k limbs (base 2^(32*k)) */
-int mp_shift_left_words(mp_int *x, size_t k) {
+/*
+ * mp_shift_left_words: shift limbs up by k words (insert k zero limbs at bottom).
+ * Implemented using memmove; base is 2^(MP_LIMB_BITS).
+ */
+int mp_shift_left_words(mp_int *x, size_t k)
+{
     if (!x) return FAILURE;
     if (x->sign == 0 || k == 0) return SUCCESS;
-    if (mp_reserve(x, x->length + k) != SUCCESS)
-        return FAILURE;
-    memmove(x->digits + k, x->digits, x->length * sizeof(unsigned int));
-    memset(x->digits, 0, k * sizeof(unsigned int));
+    if (mp_reserve(x, x->length + k) != SUCCESS) return FAILURE;
+    memmove(x->digits + k, x->digits, x->length * sizeof(mp_limb_t));
+    memset(x->digits, 0, k * sizeof(mp_limb_t));
     x->length += k;
     return SUCCESS;
 }
 
-/* Helper: right-shift by k limbs (words). Destructive. */
-int mp_shift_right_words(mp_int *x, size_t k) {
+/*
+ * mp_shift_right_words: destructive shift down by k words.
+ * If k >= length, becomes zero.
+ */
+int mp_shift_right_words(mp_int *x, size_t k)
+{
     size_t i;
     if (!x) return FAILURE;
     if (x->length == 0 || k == 0) return SUCCESS;
     if (k >= x->length) {
-        /* becomes zero */
         x->length = 0;
         x->sign = 0;
         return SUCCESS;
     }
-    /* shift down */
-    for (i = 0; i + k < x->length; ++i) {
-        x->digits[i] = x->digits[i + k];
-    }
-    /* clear high limbs */
-    for (; i < x->length; ++i) x->digits[i] = 0;
+    for (i = 0; i + k < x->length; ++i) x->digits[i] = x->digits[i + k];
+    for (; i < x->length; ++i) x->digits[i] = (mp_limb_t)0;
     x->length -= k;
-    /* trim leading zeros */
-    while (x->length > 0 && x->digits[x->length - 1] == 0) x->length--;
-    if (x->length == 0) x->sign = 0;
+    mp_normalize(x);
     return SUCCESS;
 }
 
-void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m) {
+/*
+ * mp_split: split src into low (least-significant m limbs) and high (remaining limbs).
+ * Both low and high must be initialized by caller.
+ */
+void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m)
+{
     size_t i;
-
     if (!src || !low || !high) return;
 
     mp_reserve(low, m);
     mp_reserve(high, (src->length > m) ? src->length - m : 0);
 
     low->length = (src->length < m) ? src->length : m;
-    for (i = 0; i < low->length; ++i)
-        low->digits[i] = src->digits[i];
+    for (i = 0; i < low->length; ++i) low->digits[i] = src->digits[i];
     low->sign = (low->length == 0) ? 0 : +1;
 
     if (src->length > m) {
         high->length = src->length - m;
-        for (i = 0; i < high->length; ++i)
-            high->digits[i] = src->digits[i + m];
+        for (i = 0; i < high->length; ++i) high->digits[i] = src->digits[i + m];
         high->sign = +1;
     } else {
         high->length = 0;
@@ -376,75 +474,99 @@ void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m) {
     }
 }
 
-static int mp_is_zero(const mp_int *x) {
-    if (!x) return 1;
-    return (x->length == 0 || x->sign == 0) ? 1 : 0;
-}
-
-/* Karatsuba multiply (recursive) */
+/*
+ * mp_karatsuba_mul: Karatsuba multiplication (recursive).
+ * Uses safe temporaries and avoids aliasing problems by copying into fresh temps
+ * for each arithmetic step. For small limb lengths it falls back to naive multiply.
+ */
 int mp_karatsuba_mul(mp_int *result, const mp_int *a, const mp_int *b)
 {
     size_t n, m;
-    mp_int x0, x1, y0, y1, z0, z1, z2, tmp1, tmp2, res_tmp;
+    mp_int x0, x1, y0, y1;
+    mp_int z0, z1, z2;
+    mp_int t1, t2, res_tmp, tmp;
 
     if (!result || !a || !b) return FAILURE;
 
-    /* Base case: small numbers → naive multiply */
-    if (a->length <= 16 || b->length <= 16) {
+    /* Base case: small numbers -> naive multiply */
+    if (a->length <= NAIVE_THRESHOLD || b->length <= NAIVE_THRESHOLD) {
         return mp_mul_naive(result, a, b);
     }
 
     n = (a->length > b->length) ? a->length : b->length;
-    m = n / 2;
+    m = n / 2u;
 
     mp_init(&x0); mp_init(&x1);
     mp_init(&y0); mp_init(&y1);
     mp_init(&z0); mp_init(&z1); mp_init(&z2);
-    mp_init(&tmp1); mp_init(&tmp2);
-    mp_init(&res_tmp);
+    mp_init(&t1); mp_init(&t2); mp_init(&res_tmp); mp_init(&tmp);
 
     mp_split(a, &x0, &x1, m);
     mp_split(b, &y0, &y1, m);
 
     /* z0 = x0 * y0 */
-    mp_karatsuba_mul(&z0, &x0, &y0);
+    if (mp_karatsuba_mul(&z0, &x0, &y0) != SUCCESS) goto cleanup;
 
     /* z2 = x1 * y1 */
-    mp_karatsuba_mul(&z2, &x1, &y1);
+    if (mp_karatsuba_mul(&z2, &x1, &y1) != SUCCESS) goto cleanup;
 
-    /* tmp1 = x0 + x1, tmp2 = y0 + y1 */
-    mp_add_abs(&tmp1, &x0, &x1);
-    mp_add_abs(&tmp2, &y0, &y1);
+    /* t1 = x0 + x1 ; t2 = y0 + y1 */
+    if (mp_add_abs(&t1, &x0, &x1) != SUCCESS) goto cleanup;
+    if (mp_add_abs(&t2, &y0, &y1) != SUCCESS) goto cleanup;
 
-    /* z1 = (x0+x1)*(y0+y1) - z2 - z0 */
-    mp_karatsuba_mul(&z1, &tmp1, &tmp2);
-    mp_sub_abs(&z1, &z1, &z2);
-    mp_sub_abs(&z1, &z1, &z0);
+    /* z1 = t1 * t2 - z2 - z0 */
+    if (mp_karatsuba_mul(&z1, &t1, &t2) != SUCCESS) goto cleanup;
+    if (mp_sub_abs(&z1, &z1, &z2) != SUCCESS) goto cleanup;
+    if (mp_sub_abs(&z1, &z1, &z0) != SUCCESS) goto cleanup;
 
-    /* combine result = z0 + (z1 << (m words)) + (z2 << (2*m words)) */
+    /* combine: res_tmp = z0 + (z1 << m) + (z2 << 2*m)
+       Use temporaries to avoid aliasing with operands. */
+    if (mp_copy(&res_tmp, &z0) != SUCCESS) goto cleanup;
+
+    /* shift and add z1 */
+    if (mp_shift_left_words(&z1, m) != SUCCESS) goto cleanup;
+    if (mp_add_abs(&tmp, &res_tmp, &z1) != SUCCESS) goto cleanup;
+    mp_free(&res_tmp);
     mp_init(&res_tmp);
-    mp_add_abs(&res_tmp, &z0, &res_tmp);
-    mp_shift_left_words(&z1, m);
-    mp_add_abs(&res_tmp, &res_tmp, &z1);
-    mp_shift_left_words(&z2, 2 * m);
-    mp_add_abs(&res_tmp, &res_tmp, &z2);
+    if (mp_copy(&res_tmp, &tmp) != SUCCESS) goto cleanup;
+    mp_free(&tmp);
 
-    /* move res_tmp to result */
-    mp_copy(result, &res_tmp);
+    /* shift and add z2 */
+    if (mp_shift_left_words(&z2, 2u * m) != SUCCESS) goto cleanup;
+    if (mp_add_abs(&tmp, &res_tmp, &z2) != SUCCESS) goto cleanup;
+    mp_free(&res_tmp);
+    mp_init(&res_tmp);
+    if (mp_copy(&res_tmp, &tmp) != SUCCESS) goto cleanup;
+    mp_free(&tmp);
+
+    /* move res_tmp into result */
+    if (mp_copy(result, &res_tmp) != SUCCESS) goto cleanup;
     result->sign = a->sign * b->sign;
 
-    /* free temps */
+    /* success: free temps and return */
     mp_free(&x0); mp_free(&x1);
     mp_free(&y0); mp_free(&y1);
     mp_free(&z0); mp_free(&z1); mp_free(&z2);
-    mp_free(&tmp1); mp_free(&tmp2);
+    mp_free(&t1); mp_free(&t2);
     mp_free(&res_tmp);
-
+    mp_free(&tmp);
     return SUCCESS;
+
+cleanup:
+    mp_free(&x0); mp_free(&x1);
+    mp_free(&y0); mp_free(&y1);
+    mp_free(&z0); mp_free(&z1); mp_free(&z2);
+    mp_free(&t1); mp_free(&t2);
+    mp_free(&res_tmp);
+    mp_free(&tmp);
+    return FAILURE;
 }
 
-/* Multiplies two mp_ints (hybrid) */
-int mp_mul(mp_int *result, const mp_int *a, const mp_int *b) {
+/*
+ * mp_mul: hybrid multiply. Uses naive for small sizes, Karatsuba for larger.
+ */
+int mp_mul(mp_int *result, const mp_int *a, const mp_int *b)
+{
     if (!result || !a || !b) return FAILURE;
     if (a->length < NAIVE_THRESHOLD || b->length < NAIVE_THRESHOLD)
         return mp_mul_naive(result, a, b);
@@ -452,30 +574,29 @@ int mp_mul(mp_int *result, const mp_int *a, const mp_int *b) {
         return mp_karatsuba_mul(result, a, b);
 }
 
-/* mp_div: result = a / b (integer division).  ANSI C90-compliant.
-   Quotient sign follows a->sign * b->sign. Returns SUCCESS/FAILURE. */
-int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
-    /* declarations (C90) */
-    mp_int rem;
-    mp_int tmp;         /* shifted divisor */
-    mp_int candidate;
-    mp_int doubled;
-    mp_int newrem;
-    mp_int quotient;
-    mp_int mult;        /* multiplier for candidate (power-of-two) */
-    mp_int newq;
+/* ---------------- Division & Modulus ----------------------------------- */
+
+/*
+ * mp_div: integer division result = a / b (floor toward zero like C integer division).
+ *
+ * Implementation note: uses word-shift + repeated doubling subtraction algorithm.
+ * This is straightforward, ANSI-C89-friendly, and was present in the original code.
+ * For very large inputs, consider an optimized Knuth D algorithm in future.
+ */
+int mp_div(mp_int *result, const mp_int *a, const mp_int *b)
+{
+    mp_int rem, tmp, candidate, doubled, newrem, quotient, mult, newq;
     size_t shift_words;
     int status = FAILURE;
     size_t i;
 
     if (!result || !a || !b) return FAILURE;
-
     /* divisor zero */
     if (b->length == 0 || b->sign == 0) {
-        printf("Division by zero!");
+        calc_error_set();
+        printf("Division by zero!\n");
         return FAILURE;
     }
-
     /* dividend zero -> quotient zero */
     if (a->length == 0 || a->sign == 0) {
         mp_free(result);
@@ -485,16 +606,15 @@ int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
         return SUCCESS;
     }
 
-    /* Fast path: single-limb divisor -> use mp_div_small and adjust sign */
+    /* Fast path for single-limb divisor */
     if (b->length == 1) {
         mp_int q;
         unsigned int rem_small;
         mp_init(&q);
-        if (mp_div_small(&q, a, b->digits[0], &rem_small) != SUCCESS) {
+        if (mp_div_small(&q, a, (unsigned int)b->digits[0], &rem_small) != SUCCESS) {
             mp_free(&q);
             return FAILURE;
         }
-        /* mp_div_small set q.sign = a->sign; we need quotient sign = a->sign * b->sign */
         if (q.length == 0) q.sign = 0;
         else q.sign = (a->sign * b->sign);
         mp_free(result);
@@ -505,40 +625,29 @@ int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
     }
 
     /* General multi-limb divisor */
-
-    /* initialize temporaries */
-    mp_init(&rem);
-    mp_init(&tmp);
-    mp_init(&candidate);
-    mp_init(&doubled);
-    mp_init(&newrem);
-    mp_init(&quotient);
-    mp_init(&mult);
-    mp_init(&newq);
+    mp_init(&rem); mp_init(&tmp); mp_init(&candidate); mp_init(&doubled);
+    mp_init(&newrem); mp_init(&quotient); mp_init(&mult); mp_init(&newq);
 
     /* rem = |a| */
     if (mp_copy(&rem, a) != SUCCESS) goto cleanup;
     rem.sign = +1;
-
     /* tmp = |b| */
     if (mp_copy(&tmp, b) != SUCCESS) goto cleanup;
     tmp.sign = +1;
 
-    /* If |rem| < |tmp| -> quotient = 0 */
+    /* if |rem| < |tmp| => quotient = 0 */
     if (mp_cmp_abs(&rem, &tmp) < 0) {
         mp_free(result);
         mp_init(result);
-        /* quotient = 0 */
         result->sign = 0;
         result->length = 0;
         status = SUCCESS;
         goto cleanup;
     }
 
-    /* shift tmp left so its top limb lines up with rem top limb */
+    /* align tmp with rem by shifting word (limb) positions */
     shift_words = 0;
-    if (rem.length > tmp.length)
-        shift_words = rem.length - tmp.length;
+    if (rem.length > tmp.length) shift_words = rem.length - tmp.length;
     if (shift_words > 0) {
         if (mp_shift_left_words(&tmp, shift_words) != SUCCESS) goto cleanup;
     }
@@ -547,44 +656,37 @@ int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
     quotient.length = 0;
     quotient.sign = 0;
 
-    /* Iterate from current shift down to 0 */
-    for ( ; ; ) {
-        /* while rem >= tmp, subtract the largest multiple of tmp we can get by doubling.
-           For each subtraction we add the corresponding 'mult' to the quotient. */
+    for (;;) {
+        /* subtract largest multiples of tmp while rem >= tmp */
         while (mp_cmp_abs(&rem, &tmp) >= 0) {
             /* candidate = tmp */
             mp_free(&candidate);
             mp_init(&candidate);
             if (mp_copy(&candidate, &tmp) != SUCCESS) goto cleanup;
 
-            /* mult = 1 << (32 * shift_words)  (i.e. a limb with 1 at index shift_words) */
+            /* mult = 1 << (word-shift) */
             mp_free(&mult);
             mp_init(&mult);
             if (mp_reserve(&mult, shift_words + 1) != SUCCESS) goto cleanup;
-            /* zero-fill */
-            for (i = 0; i < shift_words; ++i) mult.digits[i] = 0U;
-            mult.digits[shift_words] = 1U;
+            for (i = 0; i < shift_words; ++i) mult.digits[i] = (mp_limb_t)0;
+            mult.digits[shift_words] = (mp_limb_t)1;
             mult.length = shift_words + 1;
             mult.sign = +1;
 
-            /* doubl = candidate * 2, mult *= 2 repeatedly while doubled <= rem */
+            /* Double candidate and mult while doubled <= rem */
             for (;;) {
                 mp_free(&doubled);
                 mp_init(&doubled);
                 if (mp_add_abs(&doubled, &candidate, &candidate) != SUCCESS) goto cleanup;
-
-                /* if doubled > rem -> stop doubling */
                 if (mp_cmp_abs(&doubled, &rem) > 0) {
                     mp_free(&doubled);
                     break;
                 }
-
-                /* accept doubled as new candidate */
                 mp_free(&candidate);
                 mp_init(&candidate);
                 if (mp_copy(&candidate, &doubled) != SUCCESS) goto cleanup;
 
-                /* mult = mult + mult (i.e. multiply by two) */
+                /* mult = mult + mult */
                 mp_free(&newq);
                 mp_init(&newq);
                 if (mp_add_abs(&newq, &mult, &mult) != SUCCESS) goto cleanup;
@@ -611,21 +713,17 @@ int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
             if (mp_copy(&quotient, &newq) != SUCCESS) goto cleanup;
             mp_free(&newq);
 
-            /* free candidate and mult for next iteration */
             mp_free(&candidate);
             mp_free(&mult);
-            /* loop while rem >= tmp */
         }
 
-        /* if we've shifted down to zero words stop */
         if (shift_words == 0) break;
 
-        /* shift tmp right by one word and continue */
         if (mp_shift_right_words(&tmp, 1) != SUCCESS) goto cleanup;
         shift_words--;
     }
 
-    /* set result = quotient with proper sign = a->sign * b->sign */
+    /* store quotient into result with proper sign */
     mp_free(result);
     mp_init(result);
     if (mp_copy(result, &quotient) != SUCCESS) goto cleanup;
@@ -635,39 +733,30 @@ int mp_div(mp_int *result, const mp_int *a, const mp_int *b) {
     status = SUCCESS;
 
 cleanup:
-    mp_free(&rem);
-    mp_free(&tmp);
-    mp_free(&candidate);
-    mp_free(&doubled);
-    mp_free(&newrem);
-    mp_free(&quotient);
-    mp_free(&mult);
-    mp_free(&newq);
+    mp_free(&rem); mp_free(&tmp); mp_free(&candidate);
+    mp_free(&doubled); mp_free(&newrem); mp_free(&quotient);
+    mp_free(&mult); mp_free(&newq);
     return status;
 }
 
-
-/* mp_mod: r = a % b
-   Remainder has same sign as 'a' (like C's %). Uses only ANSI C90 features. */
+/*
+ * mp_mod: remainder r = a % b (remainder sign follows a).
+ * Re-uses the same algorithmic structure as mp_div but keeps only rem.
+ */
 int mp_mod(mp_int *r, const mp_int *a, const mp_int *b)
 {
-    /* variables declared at top per C90 */
     size_t shift_words;
     int cmp;
     int status = FAILURE;
-
-    mp_int rem;
-    mp_int tmp;
-    mp_int candidate;
-    mp_int doubled;
-    mp_int newrem;
-    unsigned int rem_small;
+    mp_int rem, tmp, candidate, doubled, newrem;
 
     if (!r || !a || !b) return FAILURE;
-    /* divisor zero */
-    if (b->length == 0 || b->sign == 0) return FAILURE;
+    if (b->length == 0 || b->sign == 0) {
+        calc_error_set();
+        printf("Division by zero!\n");
+        return FAILURE;
+    }
 
-    /* dividend zero => remainder 0 */
     if (a->length == 0 || a->sign == 0) {
         mp_free(r);
         mp_init(r);
@@ -676,47 +765,38 @@ int mp_mod(mp_int *r, const mp_int *a, const mp_int *b)
         return SUCCESS;
     }
 
-    /* fast path: single-limb divisor */
+    /* Fast path: single-limb divisor */
     if (b->length == 1) {
         mp_int q;
+        unsigned int rem_small;
         mp_init(&q);
-        if (mp_div_small(&q, a, b->digits[0], &rem_small) != SUCCESS) {
+        if (mp_div_small(&q, a, (unsigned int)b->digits[0], &rem_small) != SUCCESS) {
             mp_free(&q);
             return FAILURE;
         }
         mp_free(&q);
-
         mp_free(r);
         mp_init(r);
         if (rem_small == 0) {
             r->sign = 0; r->length = 0;
         } else {
             if (mp_reserve(r, 1) != SUCCESS) return FAILURE;
-            r->digits[0] = rem_small;
+            r->digits[0] = (mp_limb_t)rem_small;
             r->length = 1;
             r->sign = (a->sign < 0) ? -1 : +1;
         }
         return SUCCESS;
     }
 
-    /* General multi-limb algorithm (word-shift + repeated-doubling subtraction) */
+    /* General multi-limb algorithm (word-shift + repeated doubling subtraction) */
+    mp_init(&rem); mp_init(&tmp); mp_init(&candidate); mp_init(&doubled); mp_init(&newrem);
 
-    /* initialize temporaries */
-    mp_init(&rem);
-    mp_init(&tmp);
-    mp_init(&candidate);
-    mp_init(&doubled);
-    mp_init(&newrem);
-
-    /* rem = |a| */
     if (mp_copy(&rem, a) != SUCCESS) goto cleanup;
     rem.sign = +1;
 
-    /* tmp = |b| */
     if (mp_copy(&tmp, b) != SUCCESS) goto cleanup;
     tmp.sign = +1;
 
-    /* if |rem| < |tmp| -> remainder is a */
     cmp = mp_cmp_abs(&rem, &tmp);
     if (cmp < 0) {
         mp_free(r);
@@ -727,59 +807,39 @@ int mp_mod(mp_int *r, const mp_int *a, const mp_int *b)
         goto cleanup;
     }
 
-    /* shift tmp left so its top limb lines up with rem top limb */
     shift_words = rem.length - tmp.length;
-    if (shift_words > 0) {
-        if (mp_shift_left_words(&tmp, shift_words) != SUCCESS) goto cleanup;
-    }
+    if (shift_words > 0) if (mp_shift_left_words(&tmp, shift_words) != SUCCESS) goto cleanup;
 
-    /* iterate from current shift down to 0 */
-    for ( ; ; ) {
-        /* while rem >= tmp, subtract the largest multiple of tmp we can get by doubling */
+    for (;;) {
         while (mp_cmp_abs(&rem, &tmp) >= 0) {
-            /* candidate = tmp */
             mp_free(&candidate);
             mp_init(&candidate);
             if (mp_copy(&candidate, &tmp) != SUCCESS) goto cleanup;
 
-            /* double candidate repeatedly while doubled <= rem */
             while (1) {
                 mp_free(&doubled);
                 mp_init(&doubled);
                 if (mp_add_abs(&doubled, &candidate, &candidate) != SUCCESS) goto cleanup;
-                /* if doubled > rem break */
-                if (mp_cmp_abs(&doubled, &rem) > 0) {
-                    mp_free(&doubled);
-                    break;
-                }
-                /* accept doubled as new candidate */
+                if (mp_cmp_abs(&doubled, &rem) > 0) { mp_free(&doubled); break; }
                 mp_free(&candidate);
                 mp_init(&candidate);
                 if (mp_copy(&candidate, &doubled) != SUCCESS) goto cleanup;
-                /* loop and try doubling again */
             }
 
-            /* rem = rem - candidate  (candidate <= rem guaranteed) */
             mp_free(&newrem);
             mp_init(&newrem);
             if (mp_sub_abs(&newrem, &rem, &candidate) != SUCCESS) goto cleanup;
-            /* move newrem -> rem */
             mp_free(&rem);
             mp_init(&rem);
             if (mp_copy(&rem, &newrem) != SUCCESS) goto cleanup;
-            /* free candidate, will be recreated on next iteration if needed */
             mp_free(&candidate);
         }
 
-        /* if we've shifted down to zero words stop */
         if (shift_words == 0) break;
-
-        /* shift tmp right by one word and continue */
         if (mp_shift_right_words(&tmp, 1) != SUCCESS) goto cleanup;
         shift_words--;
     }
 
-    /* rem is the absolute remainder; attach sign of a */
     mp_free(r);
     mp_init(r);
     if (mp_copy(r, &rem) != SUCCESS) goto cleanup;
@@ -789,10 +849,263 @@ int mp_mod(mp_int *r, const mp_int *a, const mp_int *b)
     status = SUCCESS;
 
 cleanup:
-    mp_free(&rem);
-    mp_free(&tmp);
-    mp_free(&candidate);
-    mp_free(&doubled);
-    mp_free(&newrem);
+    mp_free(&rem); mp_free(&tmp); mp_free(&candidate);
+    mp_free(&doubled); mp_free(&newrem);
     return status;
+}
+
+
+/* ---------- String -> mp_int conversion helpers ----------
+   These used to be in parser.c; they logically belong in the mp_int module
+   because they construct mp_int values from textual input.
+*/
+
+/* Parse decimal string (optional leading + or -). Builds an mp_int.
+   Returns SUCCESS or FAILURE. */
+int mp_from_str_dec(mp_int *x, const char *str)
+{
+    const char *p;
+    int sign;
+    unsigned int d;
+
+    if (!x || !str) return FAILURE;
+    mp_free(x);
+    mp_init(x);
+
+    p = str;
+    while (isspace((unsigned char)*p)) p++;
+
+    sign = +1;
+    if (*p == '-') { sign = -1; p++; }
+    else if (*p == '+') { p++; }
+
+    /* skip leading zeros but keep track */
+    while (*p == '0') p++;
+
+    /* If we reached end -> value was zero (ok) */
+    if (*p == '\0') {
+        x->sign = 0;
+        x->length = 0;
+        return SUCCESS;
+    }
+
+    /* Next char must be a digit; otherwise the input is invalid */
+    if (!isdigit((unsigned char)*p)) {
+        return FAILURE;
+    }
+
+    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
+    x->digits[0] = 0;
+    x->length = 1;
+    x->sign = +1;
+
+    for (; *p; ++p) {
+        if (!isdigit((unsigned char)*p)) break;
+        d = (unsigned int)(*p - '0');
+        if (mp_mul_small(x, 10U) != SUCCESS) return FAILURE;
+        if (mp_add_small(x, d) != SUCCESS) return FAILURE;
+    }
+
+    /* after digits, only whitespace allowed */
+    while (isspace((unsigned char)*p)) p++;
+    if (*p != '\0') return FAILURE;
+
+    if (x->length == 1 && x->digits[0] == 0)
+        x->sign = 0;
+    else
+        x->sign = sign;
+    return SUCCESS;
+}
+
+/* Parse binary string, accepts optional leading + or - and optional 0b/0B prefix.
+   Also treats an input with the top provided bit = 1 as a two's-complement
+   representation (i.e. negative value) unless an explicit leading sign flips it.
+*/
+int mp_from_str_bin(mp_int *x, const char *str) {
+    size_t i;
+    const char *p;
+    const char *digits;
+    size_t digits_len;
+    unsigned int bit;
+    int explicit_sign = +1;
+
+    if (!x || !str) return FAILURE;
+    mp_free(x);
+    mp_init(x);
+
+    /* skip leading whitespace */
+    p = str;
+    while (isspace((unsigned char)*p)) p++;
+
+    /* optional explicit sign */
+    if (*p == '-') { explicit_sign = -1; p++; }
+    else if (*p == '+') { p++; }
+
+    /* optional 0b/0B prefix */
+    if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) p += 2;
+
+    /* collect contiguous binary digits */
+    digits = p;
+    digits_len = 0;
+    while (p[digits_len] == '0' || p[digits_len] == '1') digits_len++;
+
+    if (digits_len == 0) {
+        /* no binary digits -> invalid */
+        return FAILURE;
+    }
+
+    /* initialize x = 0 */
+    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
+    x->digits[0] = 0;
+    x->length = 1;
+    x->sign = 1; /* building magnitude */
+
+    /* parse digits left-to-right */
+    for (i = 0; i < digits_len; ++i) {
+        bit = (unsigned int)(digits[i] - '0');
+        if (mp_mul_small(x, 2U) != SUCCESS) return FAILURE;
+        if (mp_add_small(x, bit) != SUCCESS) return FAILURE;
+    }
+
+    /* ensure no junk after the digits (only whitespace allowed) */
+    p = digits + digits_len;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p != '\0') return FAILURE;
+
+    /* two's complement detection: if the highest provided bit is 1, interpret as negative:
+       value = x - 2^digits_len */
+    if (digits[0] == '1') {
+        mp_int pow2;
+        mp_int tmp;
+        mp_init(&pow2);
+        mp_init(&tmp);
+
+        /* pow2 = 2^digits_len */
+        if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+        pow2.digits[0] = 1;
+        pow2.length = 1;
+        pow2.sign = 1;
+        for (i = 0; i < digits_len; ++i) {
+            if (mp_mul_small(&pow2, 2U) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+        }
+
+        /* tmp = x - pow2  (may be negative) */
+        if (mp_sub(&tmp, x, &pow2) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+
+        /* copy tmp into x */
+        mp_free(x);
+        mp_init(x);
+        if (mp_copy(x, &tmp) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+
+        mp_free(&pow2);
+        mp_free(&tmp);
+    }
+
+    /* explicit sign flips computed sign */
+    if (explicit_sign == -1) {
+        x->sign = -x->sign;
+    }
+
+    return SUCCESS;
+}
+
+/* Parse hexadecimal string, accepts optional leading + or - and optional 0x/0X prefix.
+   Detects sign bit from the top nibble and interprets as two's complement if top nibble >= 8.
+*/
+int mp_from_str_hex(mp_int *x, const char *str) {
+    /* ANSI C90: declare at top */
+    size_t i;
+    const char *p;
+    const char *digits;
+    size_t digits_len;
+    int val;
+    int explicit_sign = +1;
+    int first_nibble;
+
+    if (!x || !str) return FAILURE;
+    mp_free(x);
+    mp_init(x);
+
+    /* skip leading whitespace */
+    p = str;
+    while (isspace((unsigned char)*p)) p++;
+
+    /* optional explicit sign */
+    if (*p == '-') { explicit_sign = -1; p++; }
+    else if (*p == '+') { p++; }
+
+    /* optional 0x/0X prefix */
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+
+    /* collect contiguous hex digits */
+    digits = p;
+    digits_len = 0;
+    while (isxdigit((unsigned char)p[digits_len])) digits_len++;
+
+    if (digits_len == 0) {
+        /* no hex digits -> invalid */
+        return FAILURE;
+    }
+
+    /* ensure no trailing junk after digits (only whitespace allowed) */
+    p = digits + digits_len;
+    while (isspace((unsigned char)*p)) p++;
+    if (*p != '\0') return FAILURE;
+
+    /* initialize x = 0 */
+    if (mp_reserve(x, 1) != SUCCESS) return FAILURE;
+    x->digits[0] = 0;
+    x->length = 1;
+    x->sign = 1;
+
+    for (i = 0; i < digits_len; ++i) {
+        char c = digits[i];
+        if (isdigit((unsigned char)c)) val = c - '0';
+        else if (isupper((unsigned char)c)) val = c - 'A' + 10;
+        else val = c - 'a' + 10;
+
+        if (mp_mul_small(x, 16U) != SUCCESS) return FAILURE;
+        if (mp_add_small(x, (unsigned int)val) != SUCCESS) return FAILURE;
+    }
+
+    /* detect sign-bit from first nibble */
+    first_nibble = 0;
+    if (isxdigit((unsigned char)digits[0])) {
+        char c = digits[0];
+        if (isdigit((unsigned char)c)) first_nibble = c - '0';
+        else if (isupper((unsigned char)c)) first_nibble = c - 'A' + 10;
+        else first_nibble = c - 'a' + 10;
+    }
+
+    if (first_nibble & 0x8) {
+        /* interpret as two's complement negative: x = x - 2^(4*digits_len) */
+        mp_int pow2;
+        mp_int tmp;
+        mp_init(&pow2);
+        mp_init(&tmp);
+
+        if (mp_reserve(&pow2, 1) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+        pow2.digits[0] = 1;
+        pow2.length = 1;
+        pow2.sign = 1;
+
+        /* pow2 = 2^(4 * digits_len) */
+        for (i = 0; i < (4 * digits_len); ++i) {
+            if (mp_mul_small(&pow2, 2U) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+        }
+
+        if (mp_sub(&tmp, x, &pow2) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+
+        mp_free(x);
+        mp_init(x);
+        if (mp_copy(x, &tmp) != SUCCESS) { mp_free(&pow2); mp_free(&tmp); return FAILURE; }
+
+        mp_free(&pow2);
+        mp_free(&tmp);
+    }
+
+    /* explicit sign flips */
+    if (explicit_sign == -1) x->sign = -x->sign;
+
+    return SUCCESS;
 }
