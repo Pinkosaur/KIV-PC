@@ -1,3 +1,1 @@
-- factorial gets priority over negation
-- parsing of -(abc)
-- file processing
+- test on Windows
