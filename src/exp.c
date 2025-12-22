@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include "mp_int.h"
 #include "exp.h"
+#include "error.h"
 
 /*
  * mp_pow: see header for full documentation.

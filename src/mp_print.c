@@ -114,14 +114,16 @@ int mp_print_dec(mp_int *x)
         printf("%s", chunks[i - 1]);
     }
 
-    /* cleanup */
+    /* regular cleanup */
     for (i = 0; i < num_chunks; ++i) free(chunks[i]);
     free(chunks);
     mp_free(&tmp);
     mp_free(&q);
     return SUCCESS;
 
+    /* error cleanup */
 cleanup:
+    if(chunks) free(chunks);
     mp_free(&tmp);
     mp_free(&q);
     return FAILURE;

@@ -27,6 +27,7 @@
 #include "mp_print.h"
 #include "exp.h"
 #include "fact.h"
+#include "error.h"
 
 /* Helper: returns true if the character is one of the single-char operators we support. */
 static int is_operator(char c) {

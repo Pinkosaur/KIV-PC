@@ -16,9 +16,10 @@
 #include <string.h>
 #include "mp_int.h"
 #include "fact.h"
+#include "error.h"
 
 /* Precomputed factorial table */
-const FactEntry fact_table[] = {
+const fact_entry fact_table[] = {
     {0, "1"},
     {1, "1"},
     {2, "2"},

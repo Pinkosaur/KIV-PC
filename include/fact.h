@@ -4,17 +4,17 @@
 #include "mp_int.h"
 
 /*
- * FactEntry
+ * fact_entry
  *   Associates an unsigned integer n with a decimal string containing n!.
  *   The fact_table[] array is expected to be terminated with {0, NULL}.
  */
 typedef struct {
     unsigned int n;
     const char *fact_str;
-} FactEntry;
+} fact_entry;
 
 /* External table of some precomputed factorials (provided by fact.c) */
-extern const FactEntry fact_table[];
+extern const fact_entry fact_table[];
 
 /*
  * mp_fact
