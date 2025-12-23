@@ -2,15 +2,15 @@
  * main.c -- calculator REPL / file-processing entry point
  *
  * Behavior:
- *  - With no arguments: interactive REPL (commands: bin/hex/dec/out/exit/quit).
- *  - With one argument: treat as filename and call process_file(filename).
+ * - With no arguments: interactive REPL (commands: bin/hex/dec/out/exit/quit).
+ * - With one argument: treat as filename and call process_file(filename).
  *
  * Important change:
- *  - Do NOT attempt to parse the input again as a literal after a successful
- *    expression evaluation. Only try literal parsing when expression parsing
- *    / evaluation fails (and there was no runtime error).
- *  - Literal parsing is strict: optional sign, optional 0x/0b prefix, then
- *    only digits of the selected base until the end of the token.
+ * - Do NOT attempt to parse the input again as a literal after a successful
+ * expression evaluation. Only try literal parsing when expression parsing
+ * / evaluation fails (and there was no runtime error).
+ * - Literal parsing is strict: optional sign, optional 0x/0b prefix, then
+ * only digits of the selected base until the end of the token.
  */
 
 #include <stdio.h>
@@ -20,14 +20,7 @@
 #include "parser.h"
 #include "mp_print.h"
 #include "mp_int.h"
-
-/* Forward declaration of runtime-error flag helpers (if you are using them).
-   If you implemented calc_error_was_set()/calc_error_clear() in error.c/h,
-   include "error.h" and remove these prototypes. If not used, this code still
-   works by omitting the calls (they are guarded by #ifdef in comments below). */
-/* extern int calc_error_was_set(void);
-   extern void calc_error_clear(void);
-*/
+#include "error.h" /* Included to access calc_error functions */
 
 /* Validate that 's' is a strict standalone numeric literal (no trailing garbage).
    Returns:
@@ -39,7 +32,6 @@
 */
 static int is_strict_literal(const char *s) {
     const char *p;
-    int base = 10; /* default base */
     int saw_digit = 0;
 
     if (!s) return 0;
@@ -53,23 +45,21 @@ static int is_strict_literal(const char *s) {
 
     /* detect 0x / 0b prefix (only if there is at least one more char) */
     if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) {
-        base = 16;
         p += 2;
         /* require at least one hex digit */
         for ( ; *p; ++p) {
             if (!isxdigit((unsigned char)*p)) return 0;
             saw_digit = 1;
         }
-        return saw_digit ? 16 : 0;
+        return saw_digit ? 16 : 0; /* hexadecimal or decimal */
     }
     if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) {
-        base = 2;
         p += 2;
         for (; *p; ++p) {
             if (*p != '0' && *p != '1') return 0;
             saw_digit = 1;
         }
-        return saw_digit ? 2 : 0;
+        return saw_digit ? 2 : 0; /* binary or decimal */
     }
 
     /* decimal: require at least one digit, and only digits until end */
@@ -85,7 +75,7 @@ int main(int argc, char *argv[]) {
        Each entry is int func(mp_int *). */
     int (*mp_print[])(mp_int *) = { mp_print_dec, mp_print_bin, mp_print_hex };
     int print_format = DEC;
-
+    int base;
     /* Temporaries used by REPL and expression evaluation */
     mp_int a, b, c;
     /* Buffers sized for typical use; modest for 32-bit stack safety */
@@ -116,6 +106,9 @@ int main(int argc, char *argv[]) {
     while (1) {
         printf("> ");
         if (!fgets(buf, sizeof(buf), stdin)) break;
+
+        /* Clear the global error flag before processing new input */
+        calc_error_clear();
 
         /* Trim trailing newline / CR */
         L = strlen(buf);
@@ -159,9 +152,9 @@ int main(int argc, char *argv[]) {
 
         /*
          * Expression handling:
-         *  - Tokenize input
-         *  - Convert to postfix (shunting-yard)
-         *  - Evaluate postfix, print the evaluated result
+         * - Tokenize input
+         * - Convert to postfix (shunting-yard)
+         * - Evaluate postfix, print the evaluated result
          *
          * The parser/tokenizer handle unary minus, postfix factorial precedence, parentheses, etc.
          */
@@ -180,9 +173,17 @@ int main(int argc, char *argv[]) {
             mp_free(&c);
             continue;
         } else {
+            /* * Evaluation failed. 
+             * Check if it was due to a runtime error (like Division by Zero) that was already reported.
+             */
+            if (calc_error_was_set()) {
+                /* Error message already printed by lower-level function, so don't print "Syntax error!" */
+                continue;
+            }
+
             /* Try strict literal parsing (only if the entire input is a valid literal) */
             {
-                int base = is_strict_literal(p);
+                base = is_strict_literal(p);
                 if (base == 10) {
                     mp_free(&c);
                     mp_init(&c);

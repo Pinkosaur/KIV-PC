@@ -580,8 +580,6 @@ int mp_mul(mp_int *result, const mp_int *a, const mp_int *b)
  * mp_div: integer division result = a / b (floor toward zero like C integer division).
  *
  * Implementation note: uses word-shift + repeated doubling subtraction algorithm.
- * This is straightforward, ANSI-C89-friendly, and was present in the original code.
- * For very large inputs, consider an optimized Knuth D algorithm in future.
  */
 int mp_div(mp_int *result, const mp_int *a, const mp_int *b)
 {

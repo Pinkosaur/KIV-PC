@@ -51,10 +51,10 @@
  *  - capacity: allocated size (in limbs)
  */
 typedef struct {
-    int sign;
-    mp_limb_t *digits;
-    size_t length;
-    size_t capacity;
+    int sign;           /* 0 for zero, +1 or -1 for non-zero */
+    mp_limb_t *digits;  /* little-endian limb array (LSB first) */
+    size_t length;      /* number of used limbs */
+    size_t capacity;    /* allocated limb capacity */
 } mp_int;
 
 /* ---------------- Memory & low-level helpers ------------------------------
