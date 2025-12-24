@@ -45,18 +45,32 @@ static int mp_make_pow2(mp_int *pow2, size_t k)
 
 /* ----------------------- Decimal printing --------------------------------
  * Strategy:
- *   Repeatedly divide the absolute value by BASE = 1e9 and store remainders
- *   as zero-padded chunks. Then print the most-significant chunk without
- *   padding and the rest padded. This reduces the number of division calls.
+ * Repeatedly divide the absolute value by BASE and store remainders
+ * as zero-padded chunks.
+ *
+ * Fix for Windows/16-bit limbs:
+ * If MP_LIMB_BITS is 16, we cannot use 1e9 because (rem << 16) would
+ * overflow the 32-bit accumulator used in mp_div_small.
+ * We use 10000 (10^4) instead.
  */
 int mp_print_dec(mp_int *x)
 {
     mp_int tmp, q;
     unsigned int rem;
-    char **chunks;
+    char **chunks = NULL;
     size_t num_chunks, chunk_cap;
-    const unsigned int BASE = 1000000000U; /* 1e9 */
     size_t i;
+    char **newchunks;
+    unsigned long ms_val;
+
+    /* Select safe base for 16-bit or 32-bit limbs */
+    #if defined(MP_LIMB_BITS) && (MP_LIMB_BITS == 16)
+        const unsigned int BASE = 10000U; /* 10^4 */
+        const char *FMT = "%04u";
+    #else
+        const unsigned int BASE = 1000000000U; /* 10^9 */
+        const char *FMT = "%09u";
+    #endif
 
     if (!x) return FAILURE;
     if (x->sign == 0) {
@@ -78,26 +92,24 @@ int mp_print_dec(mp_int *x)
     /* repeatedly divide by BASE storing remainder chunks */
     while (tmp.sign != 0) {
         if (num_chunks >= chunk_cap) {
-            char **newchunks;
             chunk_cap *= 2;
             newchunks = (char**) realloc(chunks, chunk_cap * sizeof(char*));
-            if (!newchunks) { free(chunks); goto cleanup; }
+            if (!newchunks) { free(chunks); chunks = NULL; goto cleanup; }
             chunks = newchunks;
         }
 
         if (mp_div_small(&q, &tmp, BASE, &rem) != SUCCESS) {
-            free(chunks);
             goto cleanup;
         }
 
-        chunks[num_chunks] = (char*) malloc(10); /* 9 digits + null */
-        if (!chunks[num_chunks]) { free(chunks); goto cleanup; }
-        sprintf(chunks[num_chunks], "%09u", rem);
+        chunks[num_chunks] = (char*) malloc(16); 
+        if (!chunks[num_chunks]) { goto cleanup; }
+        sprintf(chunks[num_chunks], FMT, rem);
         num_chunks++;
 
         mp_free(&tmp);
         mp_init(&tmp);
-        if (mp_copy(&tmp, &q) != SUCCESS) { free(chunks); goto cleanup; }
+        if (mp_copy(&tmp, &q) != SUCCESS) { goto cleanup; }
     }
 
     /* print sign */
@@ -105,7 +117,7 @@ int mp_print_dec(mp_int *x)
 
     /* print most-significant chunk without leading zeros */
     if (num_chunks > 0) {
-        unsigned long ms_val = strtoul(chunks[num_chunks - 1], NULL, 10);
+        ms_val = strtoul(chunks[num_chunks - 1], NULL, 10);
         printf("%lu", ms_val);
     }
 
@@ -123,19 +135,16 @@ int mp_print_dec(mp_int *x)
 
     /* error cleanup */
 cleanup:
-    if(chunks) free(chunks);
+    if (chunks) {
+        for (i = 0; i < num_chunks; ++i) if(chunks[i]) free(chunks[i]);
+        free(chunks);
+    }
     mp_free(&tmp);
     mp_free(&q);
     return FAILURE;
 }
 
-/* ----------------------- Binary printing ---------------------------------
- * For positive x: print '0b' followed by w = bitlen(x)+1 bits, top bit is 0
- *   (explicit sign bit). This ensures a positive number always starts with 0.
- * For negative x: compute minimal w = bitlen(|x|)+1 and print (2^w + x) in w bits.
- *
- * The implementation uses MP_LIMB_BITS (limb width) so it works for 16/32-bit limbs.
- */
+/* ----------------------- Binary printing --------------------------------- */
 int mp_print_bin(mp_int *x)
 {
     size_t bitlen, w, bit_index;
@@ -153,7 +162,6 @@ int mp_print_bin(mp_int *x)
 
     printf("0b");
 
-    /* compute bit length of absolute value */
     if (x->sign > 0) {
         if (x->length == 0) {
             bitlen = 0;
@@ -165,10 +173,8 @@ int mp_print_bin(mp_int *x)
             bitlen = ((size_t)top_idx) * (size_t)MP_LIMB_BITS + (size_t)tb;
         }
 
-        /* add explicit sign bit */
         w = bitlen + 1;
 
-        /* print exactly w bits MSB-first */
         for (bit_index = w; bit_index-- > 0; ) {
             size_t limb = bit_index / (size_t)MP_LIMB_BITS;
             unsigned int pos = (unsigned int)(bit_index % (size_t)MP_LIMB_BITS);
@@ -178,7 +184,6 @@ int mp_print_bin(mp_int *x)
         }
 
     } else {
-        /* negative: compute bitlen(|x|), choose w = bitlen+1 and print two's complement */
         mp_init(&absx); mp_init(&pow2); mp_init(&val);
 
         mp_abs_copy(&absx, x);
@@ -195,19 +200,16 @@ int mp_print_bin(mp_int *x)
 
         w = bitlen + 1;
 
-        /* pow2 = 2^w */
         if (mp_make_pow2(&pow2, w) != SUCCESS) {
             mp_free(&absx); mp_free(&pow2); mp_free(&val);
             return FAILURE;
         }
 
-        /* val = pow2 + x  (x negative -> yields two's complement magnitude) */
         if (mp_add(&val, &pow2, x) != SUCCESS) {
             mp_free(&absx); mp_free(&pow2); mp_free(&val);
             return FAILURE;
         }
 
-        /* print exactly w bits of val */
         for (bit_index = w; bit_index-- > 0; ) {
             size_t limb = bit_index / (size_t)MP_LIMB_BITS;
             unsigned int pos = (unsigned int)(bit_index % (size_t)MP_LIMB_BITS);
@@ -222,13 +224,7 @@ int mp_print_bin(mp_int *x)
     return SUCCESS;
 }
 
-/* ----------------------- Hexadecimal printing -----------------------------
- * Hex printing is nibble-aware. We compute minimal nibble width required to
- * represent the signed value with an explicit sign nibble (for positives),
- * or minimal two's-complement nibble-width (for negatives).
- *
- * The implementation uses MP_LIMB_BITS to derive the number of nibbles per limb.
- */
+/* ----------------------- Hexadecimal printing ----------------------------- */
 int mp_print_hex(mp_int *x)
 {
     static const char HEX_CHARS[17] = "0123456789abcdef";
@@ -250,10 +246,8 @@ int mp_print_hex(mp_int *x)
 
     printf("0x");
 
-    /* nibbles per limb = MP_LIMB_BITS / 4 (MP_LIMB_BITS is multiple of 4 in our setups) */
     nibbles_per_limb = (unsigned int)(MP_LIMB_BITS / 4u);
 
-    /* positive values: minimal magnitude nibbles, but if top nibble >= 8 add leading 0 nibble */
     if (x->sign > 0) {
         if (x->length == 0) {
             bitlen = 0;
@@ -265,11 +259,9 @@ int mp_print_hex(mp_int *x)
             bitlen = ((size_t)top_idx) * (size_t)MP_LIMB_BITS + (size_t)tb;
         }
 
-        /* minimal nibbles to represent magnitude */
         if (bitlen == 0) mag_nibbles = 1;
         else mag_nibbles = (bitlen + 3) / 4;
 
-        /* determine whether top nibble's high bit would be 1 -> prepend 0 nibble */
         {
             size_t top_nib_index = mag_nibbles - 1;
             size_t limb = top_nib_index / (size_t)nibbles_per_limb;
@@ -280,7 +272,6 @@ int mp_print_hex(mp_int *x)
             else total_nibbles = mag_nibbles;
         }
 
-        /* print exactly total_nibbles hex digits (MSB first) */
         for (nib_index = total_nibbles; nib_index-- > 0; ) {
             size_t limb = nib_index / (size_t)nibbles_per_limb;
             unsigned int nib_shift = (unsigned int)((nib_index % nibbles_per_limb) * 4u);
@@ -290,7 +281,6 @@ int mp_print_hex(mp_int *x)
         }
 
     } else {
-        /* Negative: minimal two's-complement nibbles */
         mp_init(&absx); mp_init(&powb); mp_init(&mpval);
 
         mp_abs_copy(&absx, x);
@@ -305,7 +295,6 @@ int mp_print_hex(mp_int *x)
             bitlen = ((size_t)top_idx) * (size_t)MP_LIMB_BITS + (size_t)tb;
         }
 
-        /* wbits = bitlen + 1; compute minimal nibbles = ceil(wbits/4) */
         {
             size_t wbits = bitlen + 1;
             size_t nibbles = (wbits + 3) / 4;
@@ -313,19 +302,16 @@ int mp_print_hex(mp_int *x)
             total_nibbles = nibbles;
         }
 
-        /* powb = 2^(4 * total_nibbles) */
         if (mp_make_pow2(&powb, total_nibbles * 4) != SUCCESS) {
             mp_free(&absx); mp_free(&powb); mp_free(&mpval);
             return FAILURE;
         }
 
-        /* mpval = powb + x  (x negative) */
         if (mp_add(&mpval, &powb, x) != SUCCESS) {
             mp_free(&absx); mp_free(&powb); mp_free(&mpval);
             return FAILURE;
         }
 
-        /* print exactly total_nibbles digits from mpval */
         for (nib_index = total_nibbles; nib_index-- > 0; ) {
             size_t limb = nib_index / (size_t)nibbles_per_limb;
             unsigned int nib_shift = (unsigned int)((nib_index % nibbles_per_limb) * 4u);
