@@ -1,6 +1,6 @@
 # Makefile.win -- for GNU make on Windows (MinGW/MSYS or Git-Bash)
-CC ?= gcc
-CFLAGS ?= -Wall -pedantic -ansi -Wextra -O2 -Iinclude -pg
+CC = gcc
+CFLAGS ?= -Wall -pedantic -ansi -Wextra -O2 -Iinclude
 CFLAGS += -MMD -MP
 LDFLAGS ?=
 BIN ?= calc.exe
@@ -17,20 +17,12 @@ all: dirs $(BIN)
 
 # Create build dir in a way that works in both sh and cmd shells:
 dirs:
-	@if [ -d "$(BUILDDIR)" ]; then :; else \
-		if mkdir -p $(BUILDDIR) 2>/dev/null; then :; else \
-			if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"; fi; \
-		fi \
-	fi
+	@if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"
 
 $(OBJS): | $(BUILDDIR)
 
 $(BUILDDIR):
-	@if [ -d "$(BUILDDIR)" ]; then :; else \
-		if mkdir -p $(BUILDDIR) 2>/dev/null; then :; else \
-			if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"; fi; \
-		fi \
-	fi
+	@if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@

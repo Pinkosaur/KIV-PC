@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -pedantic -ansi -Wextra -O2 -Iinclude -pg
+CFLAGS = -Wall -pedantic -ansi -Wextra -O2 -Iinclude
 BIN = calc.exe
 
 SRCDIR = src
