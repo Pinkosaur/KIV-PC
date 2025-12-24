@@ -926,6 +926,8 @@ int mp_from_str_bin(mp_int *x, const char *str) {
     size_t digits_len;
     unsigned int bit;
     int explicit_sign = +1;
+    mp_int pow2;
+    mp_int tmp;
 
     if (!x || !str) return FAILURE;
     mp_free(x);
@@ -973,8 +975,6 @@ int mp_from_str_bin(mp_int *x, const char *str) {
     /* two's complement detection: if the highest provided bit is 1, interpret as negative:
        value = x - 2^digits_len */
     if (digits[0] == '1') {
-        mp_int pow2;
-        mp_int tmp;
         mp_init(&pow2);
         mp_init(&tmp);
 

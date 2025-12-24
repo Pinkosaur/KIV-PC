@@ -68,6 +68,7 @@ int mp_fact(mp_int *r, const mp_int *a)
     size_t k;
     mp_int n_mp;
     int rc = FAILURE;
+    unsigned int mul;
 
     if (!r || !a) return FAILURE;
 
@@ -139,7 +140,7 @@ int mp_fact(mp_int *r, const mp_int *a)
     while (mp_cmp_abs(&i, a) <= 0) {
         if (mp_fits_uint(&i)) {
             /* fast path: multiplier fits in single limb */
-            unsigned int mul = i.digits[0];
+            mul = i.digits[0];
             if (mp_mul_small(&acc, mul) != SUCCESS) goto fail;
         } else {
             /* general multiply */

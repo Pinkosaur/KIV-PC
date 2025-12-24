@@ -238,7 +238,7 @@ void to_postfix(TokenList *infix, TokenList *postfix) {
  * Supports binary operators (+, -, *, /, %, ^) and unary operators (!, ~).
  */
 int eval_postfix(TokenList *postfix, mp_int *result) {
-    mp_int stack[128];
+    mp_int stack[128], a, b, out, zero;
     int i;
     int sp = 0;
     char *tok;
@@ -256,10 +256,6 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
                 /* postfix/prefix unary: pop one operand */
                 if (sp < 1) return FAILURE;
                 {
-                    mp_int a;
-                    mp_int out;
-                    mp_int zero;
-                    
                     mp_init(&a); 
                     mp_init(&out);
 
@@ -293,11 +289,7 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
             } else {
                 /* binary operator: pop two operands */
                 if (sp < 2) return FAILURE;
-                {
-                    mp_int a;
-                    mp_int b;
-                    mp_int out;
-                    
+                {                  
                     mp_init(&a); 
                     mp_init(&b); 
                     mp_init(&out);
@@ -362,7 +354,7 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
  * Useful for simple internal tests or one-line parsing logic that guarantees no complex syntax.
  */
 int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs, size_t rhs_cap) {
-    char buf[1024];
+    char buf[1024], ch;
     size_t i, n;
     size_t left_len;
     size_t right_len;
@@ -379,7 +371,7 @@ int split_expr(const char *input, char *lhs, size_t lhs_cap, char *op, char *rhs
     i = 0;
     
     for (i = 0; i < n; ++i) {
-        char ch = buf[i];
+        ch = buf[i];
         /* * Naive split only looks for binary operators. 
          * It treats the first operator found (ignoring leading sign) as the split point.
          */
@@ -450,6 +442,7 @@ int process_file(char str[]) {
     char line[1024];
     TokenList infix, postfix;
     mp_int result;
+    size_t L;
     int print_format = DEC;
     int (*mp_print[])(mp_int *) = { mp_print_dec, mp_print_bin, mp_print_hex };
 
@@ -463,7 +456,7 @@ int process_file(char str[]) {
     mp_init(&result);
 
     while (fgets(line, sizeof(line), f)) {
-        size_t L = strlen(line);
+        L = strlen(line);
         while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r')) { line[--L] = '\0'; }
         trim_inplace(line);
         if (line[0] == '\0') continue;
