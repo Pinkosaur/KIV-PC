@@ -468,6 +468,9 @@ int process_file(char str[]) {
     mp_init(&result);
 
     while (fgets(line, sizeof(line), f)) {
+        /* Clear error flag for new line */
+        calc_error_clear();
+
         L = strlen(line);
         while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r')) { line[--L] = '\0'; }
         trim_inplace(line);
@@ -475,6 +478,7 @@ int process_file(char str[]) {
 
         printf("> %s\n", line);
 
+        /* Check for valid commands */
         if (strcmp(line, "bin") == 0) {
             print_format = BIN;
             printf("bin\n");
@@ -509,6 +513,18 @@ int process_file(char str[]) {
         if (eval_postfix(&postfix, &result) == SUCCESS) {
             mp_print[print_format](&result);
             putchar('\n');
+        } else {
+            /* Error handling */
+            if (calc_error_was_set()) {
+                /* Runtime error (e.g. div by zero) already printed. Do nothing. */
+            } else {
+                /* If it's a single word that isn't a number/operator, it's an invalid command */
+                if (infix.count == 1 && isalpha((unsigned char)infix.tokens[0][0])) {
+                    printf("Invalid command \"%s\"!\n", infix.tokens[0]);
+                } else {
+                    printf("Syntax error!\n");
+                }
+            }
         }
 
         mp_free(&result);

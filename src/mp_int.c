@@ -982,6 +982,8 @@ int mp_from_str_bin(mp_int *x, const char *str) {
         x->sign = -x->sign;
     }
 
+    if (x->length == 1 && x->digits[0] == 0) x->sign = 0;
+
     return SUCCESS;
 }
 
@@ -1081,6 +1083,8 @@ int mp_from_str_hex(mp_int *x, const char *str) {
 
     /* explicit sign flips */
     if (explicit_sign == -1) x->sign = -x->sign;
+
+    if (x->length == 1 && x->digits[0] == 0) x->sign = 0;
 
     return SUCCESS;
 }
