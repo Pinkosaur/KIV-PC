@@ -244,6 +244,7 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
     char *tok;
     char op;
     int j;
+    int op_status = SUCCESS;
 
     for (i = 0; i < postfix->count; ++i) {
         tok = postfix->tokens[i];
@@ -254,82 +255,93 @@ int eval_postfix(TokenList *postfix, mp_int *result) {
 
             if (is_unary(op)) {
                 /* postfix/prefix unary: pop one operand */
-                if (sp < 1) return FAILURE;
-                {
-                    mp_init(&a); 
-                    mp_init(&out);
-
-                    mp_copy(&a, &stack[--sp]);
-                    mp_free(&stack[sp]);
-
-                    if (op == '!') {
-                        if (mp_fact(&out, &a) != SUCCESS) {
-                            mp_free(&a); mp_free(&out);
-                            return FAILURE;
-                        }
-                    } else if (op == '~') {
-                        /* Negation: 0 - a */
-                        mp_init(&zero); /* 0 by default */
-                        if (mp_sub(&out, &zero, &a) != SUCCESS) {
-                            mp_free(&zero); mp_free(&a); mp_free(&out);
-                            return FAILURE;
-                        }
-                        mp_free(&zero);
-                    } else {
-                        mp_free(&a); mp_free(&out);
-                        return FAILURE; /* unknown unary */
-                    }
-                    mp_free(&a);
-
-                    mp_init(&stack[sp]);
-                    mp_copy(&stack[sp], &out);
-                    mp_free(&out);
-                    sp++;
+                if (sp < 1) {
+                    /* Not enough operands */
+                    for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+                    return FAILURE;
                 }
+                
+                mp_init(&a); 
+                mp_init(&out);
+
+                mp_copy(&a, &stack[--sp]);
+                mp_free(&stack[sp]);
+
+                op_status = SUCCESS;
+                if (op == '!') {
+                    op_status = mp_fact(&out, &a);
+                } else if (op == '~') {
+                    /* Negation: 0 - a */
+                    mp_init(&zero); /* 0 by default */
+                    op_status = mp_sub(&out, &zero, &a);
+                    mp_free(&zero);
+                } else {
+                    op_status = FAILURE; /* unknown unary */
+                }
+
+                mp_free(&a);
+
+                if (op_status != SUCCESS) {
+                    mp_free(&out);
+                    /* Leak fix: free remaining stack items */
+                    for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+                    return FAILURE;
+                }
+
+                mp_init(&stack[sp]);
+                mp_copy(&stack[sp], &out);
+                mp_free(&out);
+                sp++;
             } else {
                 /* binary operator: pop two operands */
-                if (sp < 2) return FAILURE;
-                {                  
-                    mp_init(&a); 
-                    mp_init(&b); 
-                    mp_init(&out);
-
-                    /* pop b then a */
-                    mp_copy(&b, &stack[--sp]);
-                    mp_free(&stack[sp]);
-                    mp_copy(&a, &stack[--sp]);
-                    mp_free(&stack[sp]);
-
-                    /* compute */
-                    if (op == '+') {
-                        if (mp_add(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
-                    } else if (op == '-') {
-                        if (mp_sub(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
-                    } else if (op == '*') {
-                        if (mp_mul(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
-                    } else if (op == '/') {
-                        if (mp_div(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
-                    } else if (op == '%') {
-                        if (mp_mod(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
-                    } else if (op == '^') {
-                        if (mp_pow(&out, &a, &b) != SUCCESS) { mp_free(&a); mp_free(&b); mp_free(&out); return FAILURE; }
-                    } else {
-                        mp_free(&a); mp_free(&b); mp_free(&out);
-                        return FAILURE;
-                    }
-
-                    mp_free(&a);
-                    mp_free(&b);
-
-                    mp_init(&stack[sp]);
-                    mp_copy(&stack[sp], &out);
-                    mp_free(&out);
-                    sp++;
+                if (sp < 2) {
+                    /* Not enough operands (and potentially stack[0] leaking) */
+                    for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+                    return FAILURE;
                 }
+                                  
+                mp_init(&a); 
+                mp_init(&b); 
+                mp_init(&out);
+
+                /* pop b then a */
+                mp_copy(&b, &stack[--sp]);
+                mp_free(&stack[sp]);
+                mp_copy(&a, &stack[--sp]);
+                mp_free(&stack[sp]);
+
+                /* compute */
+                op_status = SUCCESS;
+                if (op == '+')      op_status = mp_add(&out, &a, &b);
+                else if (op == '-') op_status = mp_sub(&out, &a, &b);
+                else if (op == '*') op_status = mp_mul(&out, &a, &b);
+                else if (op == '/') op_status = mp_div(&out, &a, &b);
+                else if (op == '%') op_status = mp_mod(&out, &a, &b);
+                else if (op == '^') op_status = mp_pow(&out, &a, &b);
+                else                op_status = FAILURE;
+
+                mp_free(&a);
+                mp_free(&b);
+
+                if (op_status != SUCCESS) {
+                    mp_free(&out);
+                    /* Leak fix: free remaining stack items */
+                    for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+                    return FAILURE;
+                }
+
+                mp_init(&stack[sp]);
+                mp_copy(&stack[sp], &out);
+                mp_free(&out);
+                sp++;
             }
         } else {
             /* operand */
-            if (sp >= 128) return FAILURE;
+            if (sp >= 128) {
+                /* Stack overflow - clean up */
+                for (j = 0; j < sp; ++j) mp_free(&stack[j]);
+                return FAILURE;
+            }
             mp_init(&stack[sp]);
             if (parse_operand_to_mp(&stack[sp], tok) != SUCCESS) {
                 /* cleanup partially built stack */
