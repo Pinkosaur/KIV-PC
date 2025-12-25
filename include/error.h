@@ -1,10 +1,13 @@
 #ifndef ERROR_H
 #define ERROR_H
 
-/* A global runtime-error flag used to indicate that a lower-level
-   routine already printed an error message (division by zero, negative
-   factorial etc.). This avoids duplicating "Syntax error!" after a runtime
-   error has already been reported. */
+/* * Global Runtime Error Flag
+ * -------------------------
+ * This flag indicates that a lower-level routine (arithmetic, factorial, etc.)
+ * has already reported a specific error (e.g., "Division by zero!").
+ * The main loop checks this flag to avoid printing a generic "Syntax error!"
+ * on top of the specific error message.
+ */
 
 extern int calc_error_reported;
 

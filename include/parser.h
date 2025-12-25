@@ -5,14 +5,12 @@
 
 /*
  * TokenList
- *   A simple fixed-size token container.
- *   Each token is stored as a null-terminated string.
+ * ---------
+ * Container for tokens extracted from an expression string.
  *
- *   Limits:
- *    - max tokens per expression: 256
- *    - max token length: 63 chars + '\0'
- *
- *   This is sufficient for all supported expressions and ANSI C compatibility.
+ * Limits:
+ * - Max tokens per expression: 256
+ * - Max length per token: 64 characters (including null terminator)
  */
 typedef struct {
     char tokens[256][64];
@@ -21,12 +19,14 @@ typedef struct {
 
 /*
  * OpInfo
- *   Describes operator properties for the shunting-yard algorithm.
+ * ------
+ * Describes the properties of an operator for the Shunting-yard algorithm.
  *
- *   op           : operator character
- *   precedence   : higher value = higher precedence
- *   right_assoc  : nonzero if right-associative (e.g. '^')
- *   unary        : nonzero if unary (currently only postfix '!')
+ * Fields:
+ * - op:           The operator character (e.g., '+', '*', '!', '~').
+ * - precedence:   Higher values indicate higher precedence.
+ * - right_assoc:  1 if the operator is right-associative (e.g., '^', '~'), 0 otherwise.
+ * - unary:        1 if the operator is unary (e.g., '!', '~'), 0 if binary.
  */
 typedef struct {
     char op;
@@ -35,31 +35,57 @@ typedef struct {
     int unary;
 } OpInfo;
 
-/* Tokenize an infix expression into a flat token list */
+/*
+ * tokenize
+ * --------
+ * Splits an infix expression string into a list of tokens.
+ * Handles whitespace, operators, parentheses, and numeric literals.
+ * Detects unary minus context and emits '~' instead of '-'.
+ */
 void tokenize(const char *expr, TokenList *out);
 
-/* Convert infix token list to postfix (Reverse Polish) form */
+/*
+ * validate_tokens
+ * ---------------
+ * Checks the syntax of all tokens in the list BEFORE parsing begins.
+ * Returns SUCCESS if all tokens are valid operators or strict numeric literals.
+ * Returns FAILURE if any token is malformed (e.g., "0b102" or invalid chars).
+ */
+int validate_tokens(const TokenList *tokens);
+
+/*
+ * to_postfix
+ * ----------
+ * Converts an infix token list into Reverse Polish Notation (postfix)
+ * using the Shunting-yard algorithm.
+ */
 void to_postfix(TokenList *infix, TokenList *postfix);
 
-/* Evaluate postfix expression and store result */
+/*
+ * eval_postfix
+ * ------------
+ * Evaluates a postfix token list using a stack of mp_int values.
+ * Returns SUCCESS and populates 'result' on completion.
+ * Returns FAILURE on division by zero, stack errors, or memory failure.
+ */
 int eval_postfix(TokenList *postfix, mp_int *result);
 
 /*
- * Parse a single operand token into mp_int.
- * Automatically detects:
- *   - decimal
- *   - binary (0b / 0B)
- *   - hexadecimal (0x / 0X)
- * Handles optional leading '+' or '-'.
+ * parse_operand_to_mp
+ * -------------------
+ * Parses a single string token into a multiple-precision integer.
+ * Automatically detects base:
+ * - "0x..." -> Hexadecimal
+ * - "0b..." -> Binary
+ * - Otherwise -> Decimal
  */
 int parse_operand_to_mp(mp_int *dst, const char *s);
 
 /*
- * Process an input file line-by-line.
- * Supports:
- *   - expressions
- *   - format commands: dec / bin / hex / out
- * Uses the same logic as the interactive REPL.
+ * process_file
+ * ------------
+ * Reads a file line-by-line, treating each line as a command or expression.
+ * Echoes input to stdout and prints the result.
  */
 int process_file(char str[]);
 

@@ -10,7 +10,7 @@
  * - Binary and Hexadecimal printing use bitwise operations and two's complement
  * arithmetic to generate precise, minimal representations for negative numbers.
  * - The code detects the limb size (16-bit vs 32-bit) to ensure safe arithmetic
- * and preventing overflows during printing operations on all platforms.
+ * and prevent overflows during printing operations on all platforms.
  */
 
 #include <stdio.h>
@@ -19,7 +19,8 @@
 #include "mp_int.h"
 #include "mp_print.h"
 
-/* Helper: Copy absolute value of x into dst.
+/*
+ * Helper: Copy absolute value of x into dst.
  * dst must be initialized before calling.
  */
 static int mp_abs_copy(mp_int *dst, const mp_int *x)
@@ -31,7 +32,8 @@ static int mp_abs_copy(mp_int *dst, const mp_int *x)
     return SUCCESS;
 }
 
-/* Helper: Build a power of 2 (pow2 = 2^k).
+/*
+ * Helper: Build a power of 2 (pow2 = 2^k).
  * Used for calculating two's complement offsets.
  */
 static int mp_make_pow2(mp_int *pow2, size_t k)
@@ -76,15 +78,6 @@ static int is_power_of_two(const mp_int *x)
 
 /* ----------------------- Decimal printing -------------------------------- */
 
-/* Prints the mp_int in base 10.
- *
- * Algorithm:
- * 1. Convert the number to absolute value.
- * 2. Repeatedly divide by a large base (BASE) to extract "chunks" of digits.
- * 3. Store chunks in a buffer and print them in reverse order.
- * 4. BASE is chosen carefully to fit within the machine's accumulator limit
- * during division (10^4 for 16-bit limbs, 10^9 for 32-bit limbs).
- */
 int mp_print_dec(mp_int *x)
 {
     mp_int tmp, q;
@@ -180,10 +173,6 @@ cleanup:
 
 /* ----------------------- Binary printing --------------------------------- */
 
-/* Prints the mp_int in binary (base 2) with minimal two's complement representation.
- * - Positive numbers: printed with an explicit '0' sign bit (e.g., 2 -> 0b010).
- * - Negative numbers: converted to 2^N - |x| where N is the minimal width required.
- */
 int mp_print_bin(mp_int *x)
 {
     size_t bitlen, w, bit_index;
@@ -240,10 +229,7 @@ int mp_print_bin(mp_int *x)
             bitlen = ((size_t)top_idx) * (size_t)MP_LIMB_BITS + (size_t)tb;
         }
 
-        /* Determine minimal bit width:
-         * - If |x| is a power of 2, we need exactly 'bitlen' bits (e.g. -2 is 10).
-         * - Otherwise, we need 'bitlen + 1' bits (e.g. -3 is 101).
-         */
+        /* Determine minimal bit width */
         if (is_power_of_two(&absx)) w = bitlen;
         else w = bitlen + 1;
 
@@ -276,10 +262,6 @@ int mp_print_bin(mp_int *x)
 
 /* ----------------------- Hexadecimal printing ----------------------------- */
 
-/* Prints the mp_int in hexadecimal (base 16).
- * Uses minimal two's complement representation for negative numbers,
- * calculated on a nibble (4-bit) boundary.
- */
 int mp_print_hex(mp_int *x)
 {
     static const char HEX_CHARS[17] = "0123456789abcdef";
@@ -317,8 +299,7 @@ int mp_print_hex(mp_int *x)
         if (bitlen == 0) mag_nibbles = 1;
         else mag_nibbles = (bitlen + 3) / 4;
 
-        /* Determine if a leading zero nibble is needed to avoid ambiguity
-           (i.e., if the top nibble >= 8, it looks negative). */
+        /* Determine if a leading zero nibble is needed */
         {
             size_t top_nib_index = mag_nibbles - 1;
             size_t limb = top_nib_index / (size_t)nibbles_per_limb;
@@ -352,10 +333,6 @@ int mp_print_hex(mp_int *x)
             bitlen = ((size_t)top_idx) * (size_t)MP_LIMB_BITS + (size_t)tb;
         }
 
-        /* Minimal width calculation for hex:
-         * Determine minimal bit width wbits same as binary, then
-         * round up to the nearest multiple of 4 bits (nibble).
-         */
         {
             size_t wbits;
             size_t nibbles;
@@ -368,19 +345,16 @@ int mp_print_hex(mp_int *x)
             total_nibbles = nibbles;
         }
 
-        /* Calculate 2^(4 * total_nibbles) */
         if (mp_make_pow2(&powb, total_nibbles * 4) != SUCCESS) {
             mp_free(&absx); mp_free(&powb); mp_free(&mpval);
             return FAILURE;
         }
 
-        /* Value = 2^N + x */
         if (mp_add(&mpval, &powb, x) != SUCCESS) {
             mp_free(&absx); mp_free(&powb); mp_free(&mpval);
             return FAILURE;
         }
 
-        /* Print hex digits */
         for (nib_index = total_nibbles; nib_index-- > 0; ) {
             size_t limb = nib_index / (size_t)nibbles_per_limb;
             unsigned int nib_shift = (unsigned int)((nib_index % nibbles_per_limb) * 4u);
