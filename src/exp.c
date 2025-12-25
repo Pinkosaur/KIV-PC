@@ -14,7 +14,7 @@
 #include "error.h"
 
 /*
- * mp_pow: see header for full documentation.
+ * Compute r = a ^ b using integer exponentiation semantics.
  *
  * Implementation notes:
  *  - Works on temporaries to avoid altering the inputs.
@@ -26,7 +26,6 @@
  */
 int mp_pow(mp_int *r, const mp_int *a, const mp_int *b)
 {
-    /* ANSI C90: declare variables at top */
     mp_int base;
     mp_int exp;
     mp_int res;

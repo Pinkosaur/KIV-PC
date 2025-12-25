@@ -17,8 +17,7 @@
 
 /* ------------------------------- Helpers --------------------------------- */
 
-/*
- * Normalize an mp_int: remove leading zero limbs and set sign = 0 when value is zero.
+/* Normalize an mp_int: remove leading zero limbs and set sign = 0 when value is zero.
  *
  * This helper should be called when a function might leave high limbs at zero.
  */
@@ -34,8 +33,7 @@ static void mp_normalize(mp_int *x)
 
 /* ---------------- Memory management ------------------------------------- */
 
-/*
- * mp_init: initialize an mp_int to the zero/empty state.
+/* Initialize an mp_int to the zero/empty state.
  *
  * Postconditions: x->sign == 0, x->length == 0, x->digits == NULL, x->capacity == 0.
  */
@@ -49,8 +47,7 @@ int mp_init(mp_int *x)
     return SUCCESS;
 }
 
-/*
- * mp_free: free underlying digit array and reinitialize structure.
+/* Free underlying digit array and reinitialize structure.
  * Safe to call with NULL pointer (no-op).
  */
 int mp_free(mp_int *x)
@@ -64,8 +61,7 @@ int mp_free(mp_int *x)
     return SUCCESS;
 }
 
-/*
- * mp_reserve: ensure 'capacity' limbs are allocated. Does nothing if capacity <= current.
+/* Ensure 'capacity' limbs are allocated. Does nothing if capacity <= current.
  * Uses realloc semantics; on OOM returns FAILURE and leaves x unchanged.
  */
 int mp_reserve(mp_int *x, size_t capacity)
@@ -81,8 +77,7 @@ int mp_reserve(mp_int *x, size_t capacity)
     return SUCCESS;
 }
 
-/*
- * mp_copy: copy src into dst. dst must be initialized (mp_init).
+/* Copy src into dst. dst must be initialized (mp_init).
  * Leaves dst->capacity as-is (grows if needed).
  */
 int mp_copy(mp_int *dst, const mp_int *src)
@@ -103,8 +98,7 @@ int mp_copy(mp_int *dst, const mp_int *src)
 
 /* ---------------- Small-operand helpers --------------------------------- */
 
-/*
- * mp_add_small: add small unsigned 'a' to x (in-place): x += a.
+/* Add small unsigned 'a' to x (in-place): x += a.
  * Uses accumulator mp_double_t to avoid overflow.
  */
 int mp_add_small(mp_int *x, unsigned int a)
@@ -128,8 +122,7 @@ int mp_add_small(mp_int *x, unsigned int a)
     return SUCCESS;
 }
 
-/*
- * mp_mul_small: multiply x in-place by small unsigned m: x *= m.
+/* Multiply x in-place by small unsigned m: x *= m.
  * If x is zero, does nothing. Uses mp_double_t accumulator.
  */
 int mp_mul_small(mp_int *x, unsigned int m)
@@ -152,8 +145,7 @@ int mp_mul_small(mp_int *x, unsigned int m)
     return SUCCESS;
 }
 
-/*
- * mp_div_small: result = a / divisor, returns remainder optionally.
+/* mp_div_small: result = a / divisor, returns remainder optionally.
  * Division performed using long-division by treating limbs as base 2^MP_LIMB_BITS.
  *
  * Important: result must be initialized or will be initialized here.
@@ -192,8 +184,7 @@ int mp_div_small(mp_int *result, const mp_int *a, unsigned int divisor, unsigned
     return SUCCESS;
 }
 
-/*
- * mp_inc: increment x by 1 (wrapper)
+/* mp_inc: increment x by 1 (wrapper)
  */
 int mp_inc(mp_int *x)
 {
@@ -201,8 +192,7 @@ int mp_inc(mp_int *x)
     return mp_add_small(x, 1U);
 }
 
-/*
- * mp_fits_uint: return non-zero if x is non-negative and fits in a single limb.
+/* mp_fits_uint: return non-zero if x is non-negative and fits in a single limb.
  * This is used to detect when the old "small-operand" fast-path (mp_mul_small)
  * is applicable; it mirrors prior behaviour using unsigned int.
  */
@@ -219,8 +209,7 @@ int mp_fits_uint(const mp_int *x)
 
 /* ---------------- Absolute (unsigned) arithmetic ------------------------- */
 
-/*
- * mp_cmp_abs: compare absolute values of a and b.
+/* Compare absolute values of a and b.
  * Returns 1 if |a| > |b|, -1 if |a| < |b|, 0 if equal.
  */
 int mp_cmp_abs(const mp_int *a, const mp_int *b)
@@ -237,8 +226,7 @@ int mp_cmp_abs(const mp_int *a, const mp_int *b)
     return 0;
 }
 
-/*
- * mp_add_abs: result = |a| + |b| (unsigned addition).
+/* mp_add_abs: result = |a| + |b| (unsigned addition).
  * Writes the absolute result (sign = +1 when non-zero). Caller must supply
  * distinct objects for result unless they know aliasing is safe.
  */
@@ -268,8 +256,7 @@ int mp_add_abs(mp_int *result, const mp_int *a, const mp_int *b)
     return SUCCESS;
 }
 
-/*
- * mp_sub_abs: result = |a| - |b| (unsigned subtraction). Requires |a| >= |b|.
+/* mp_sub_abs: result = |a| - |b| (unsigned subtraction). Requires |a| >= |b|.
  * Borrow propagation handled via mp_double_t arithmetic.
  */
 int mp_sub_abs(mp_int *result, const mp_int *a, const mp_int *b)
@@ -303,8 +290,7 @@ int mp_sub_abs(mp_int *result, const mp_int *a, const mp_int *b)
 
 /* ---------------- Signed arithmetic ------------------------------------- */
 
-/*
- * mp_add: signed addition. Uses absolute add/sub helpers and sets sign appropriately.
+/* Signed addition. Uses absolute add/sub helpers and sets sign appropriately.
  * Copies rather than in-place mutate to simplify alias safety.
  */
 int mp_add(mp_int *result, const mp_int *a, const mp_int *b)
@@ -333,8 +319,7 @@ int mp_add(mp_int *result, const mp_int *a, const mp_int *b)
     return SUCCESS;
 }
 
-/*
- * mp_sub: result = a - b (signed). Implemented via negating a copy of b then mp_add.
+/* mp_sub: result = a - b (signed). Implemented via negating a copy of b then mp_add.
  */
 int mp_sub(mp_int *result, const mp_int *a, const mp_int *b)
 {
@@ -350,8 +335,7 @@ int mp_sub(mp_int *result, const mp_int *a, const mp_int *b)
 
 /* ---------------- Multiplication (naive + Karatsuba) --------------------- */
 
-/*
- * mp_mul_naive: classical O(n*m) multiplication with correct carry propagation.
+/* Classical O(n*m) multiplication with correct carry propagation.
  *
  * Uses mp_double_t accumulator to hold product + existing result + carry.
  * Ensures carries that propagate beyond the single next limb are handled
@@ -412,8 +396,7 @@ int mp_mul_naive(mp_int *result, const mp_int *a, const mp_int *b)
     return SUCCESS;
 }
 
-/*
- * mp_shift_left_words: shift limbs up by k words (insert k zero limbs at bottom).
+/* Shift limbs up by k words (insert k zero limbs at bottom).
  * Implemented using memmove; base is 2^(MP_LIMB_BITS).
  */
 int mp_shift_left_words(mp_int *x, size_t k)
@@ -427,8 +410,7 @@ int mp_shift_left_words(mp_int *x, size_t k)
     return SUCCESS;
 }
 
-/*
- * mp_shift_right_words: destructive shift down by k words.
+/* Destructive shift down by k words.
  * If k >= length, becomes zero.
  */
 int mp_shift_right_words(mp_int *x, size_t k)
@@ -448,8 +430,7 @@ int mp_shift_right_words(mp_int *x, size_t k)
     return SUCCESS;
 }
 
-/*
- * mp_split: split src into low (least-significant m limbs) and high (remaining limbs).
+/* Split src into low (least-significant m limbs) and high (remaining limbs).
  * Both low and high must be initialized by caller.
  */
 void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m)
@@ -474,8 +455,7 @@ void mp_split(const mp_int *src, mp_int *low, mp_int *high, size_t m)
     }
 }
 
-/*
- * mp_karatsuba_mul: Karatsuba multiplication (recursive).
+/* Karatsuba multiplication (recursive).
  * Uses safe temporaries and avoids aliasing problems by copying into fresh temps
  * for each arithmetic step. For small limb lengths it falls back to naive multiply.
  */
@@ -562,8 +542,7 @@ cleanup:
     return FAILURE;
 }
 
-/*
- * mp_mul: hybrid multiply. Uses naive for small sizes, Karatsuba for larger.
+/* mp_mul: hybrid multiply. Uses naive for small sizes, Karatsuba for larger.
  */
 int mp_mul(mp_int *result, const mp_int *a, const mp_int *b)
 {
@@ -576,8 +555,7 @@ int mp_mul(mp_int *result, const mp_int *a, const mp_int *b)
 
 /* ---------------- Division & Modulus ----------------------------------- */
 
-/*
- * mp_div: integer division result = a / b (floor toward zero like C integer division).
+/* mp_div: integer division result = a / b (floor toward zero like C integer division).
  *
  * Implementation note: uses word-shift + repeated doubling subtraction algorithm.
  */
@@ -1011,7 +989,6 @@ int mp_from_str_bin(mp_int *x, const char *str) {
    Detects sign bit from the top nibble and interprets as two's complement if top nibble >= 8.
 */
 int mp_from_str_hex(mp_int *x, const char *str) {
-    /* ANSI C90: declare at top */
     size_t i;
     const char *p;
     const char *digits;

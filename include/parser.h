@@ -5,15 +5,14 @@
 
 /*
  * TokenList
- * ----------
- * A simple fixed-size token container.
- * Each token is stored as a null-terminated string.
+ *   A simple fixed-size token container.
+ *   Each token is stored as a null-terminated string.
  *
- * Limits:
- *  - max tokens per expression: 256
- *  - max token length: 63 chars + '\0'
+ *   Limits:
+ *    - max tokens per expression: 256
+ *    - max token length: 63 chars + '\0'
  *
- * This is sufficient for all supported expressions and ANSI C compatibility.
+ *   This is sufficient for all supported expressions and ANSI C compatibility.
  */
 typedef struct {
     char tokens[256][64];
@@ -22,13 +21,12 @@ typedef struct {
 
 /*
  * OpInfo
- * ------
- * Describes operator properties for the shunting-yard algorithm.
+ *   Describes operator properties for the shunting-yard algorithm.
  *
- * op           : operator character
- * precedence   : higher value = higher precedence
- * right_assoc  : nonzero if right-associative (e.g. '^')
- * unary        : nonzero if unary (currently only postfix '!')
+ *   op           : operator character
+ *   precedence   : higher value = higher precedence
+ *   right_assoc  : nonzero if right-associative (e.g. '^')
+ *   unary        : nonzero if unary (currently only postfix '!')
  */
 typedef struct {
     char op;

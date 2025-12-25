@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
         return process_file(input_file) != FAILURE ? EXIT_SUCCESS : EXIT_FAILURE;
     }
 
-    /* Initialize big-int temporaries */
+    /* Initialize temporaries */
     mp_init(&a);
     mp_init(&b);
     mp_init(&c);
@@ -173,7 +173,7 @@ int main(int argc, char *argv[]) {
             mp_free(&c);
             continue;
         } else {
-            /* * Evaluation failed. 
+            /* Evaluation failed. 
              * Check if it was due to a runtime error (like Division by Zero) that was already reported.
              */
             if (calc_error_was_set()) {
