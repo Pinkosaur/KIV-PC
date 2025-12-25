@@ -5,8 +5,9 @@
  *
  * Logic Overview:
  * - Tokenizer: Scans the input string and identifies operators, parentheses, and operands.
- * Handles unary minus by emitting a special internal operator '~'.
- * - Shunting-yard: Converts infix to Reverse Polish Notation (Postfix).
+ * It handles the ambiguity of the '-' character (binary subtraction vs unary negation)
+ * by tracking the context. Unary minus is converted to a special internal operator '~'.
+ * - Shunting-yard: Converts the infix stream of tokens into Reverse Polish Notation (Postfix).
  * - Evaluator: Processes the postfix queue using a stack of mp_int values.
  * - Validation: Pre-validates tokens to prevent execution of syntax errors.
  */
@@ -22,7 +23,9 @@
 #include "fact.h"
 #include "error.h"
 
-/* Helper: returns true if the character is one of the single-char operators. */
+/* Helper: returns true if the character is one of the single-char operators we support.
+ * Includes '~', the internal representation for unary negation.
+ */
 static int is_operator(char c) {
     return strchr("+-*/%^!~", c) != NULL;
 }
@@ -145,28 +148,39 @@ void tokenize(const char *expr, TokenList *out) {
 
         if (out->count >= 256) break;
 
+        /* Handle + and - based on context (unary vs binary) */
         if ((*p == '+' || *p == '-') && !prev_was_operand) {
             if (*p == '-') {
                 out->tokens[out->count][0] = '~';
                 out->tokens[out->count][1] = '\0';
                 out->count++;
             }
+            /* Unary + is ignored */
             p++;
             continue;
         }
 
+        /* Handle operators and parentheses */
         if (is_operator(*p) || *p == '(' || *p == ')') {
             out->tokens[out->count][0] = *p;
             out->tokens[out->count][1] = '\0';
             out->count++;
             
-            if (*p == ')') prev_was_operand = 1;
-            else prev_was_operand = 0;
+            if (*p == ')') {
+                prev_was_operand = 1;
+            } else if (*p == '!') {
+                /* Postfix operator '!' acts as an operand for the next operator.
+                   This ensures "10! - 5" is parsed as binary minus, not unary. */
+                prev_was_operand = 1;
+            } else {
+                prev_was_operand = 0;
+            }
             
             p++;
             continue;
         }
 
+        /* Handle operands (literals) */
         i = 0;
         while (*p && !isspace((unsigned char)*p) && !is_operator(*p) && *p != '(' && *p != ')') {
             if (i < 63) buf[i++] = *p;
@@ -307,6 +321,11 @@ int process_file(char str[]) {
         if (line[0] == '\0') continue;
         printf("> %s\n", line);
 
+        /* Handle Commands */
+        if (!strcmp(line, "quit") || !strcmp(line, "exit")) {
+            printf("%s\n", line); /* Echo the quit command to output */
+            break; /* Stop processing the file */
+        }
         if (!strcmp(line, "bin")) { print_format=BIN; printf("bin\n"); continue; }
         if (!strcmp(line, "hex")) { print_format=HEX; printf("hex\n"); continue; }
         if (!strcmp(line, "dec")) { print_format=DEC; printf("dec\n"); continue; }
@@ -319,7 +338,7 @@ int process_file(char str[]) {
 
         tokenize(line, &infix);
         
-        /* Validate syntax BEFORE evaluation */
+        /* Validate syntax before evaluation */
         if (validate_tokens(&infix) != SUCCESS) {
             if (infix.count == 1 && isalpha((unsigned char)infix.tokens[0][0])) {
                 printf("Invalid command \"%s\"!\n", infix.tokens[0]);
